@@ -18,35 +18,22 @@ except ImportError:
 CURRENT_SCRIPT_DIR = str(BASE_DIR)
 
 
-def get_latest_cif_info(cif_dir: str | os.PathLike = CIF_DIR):
+def get_cif_info(cif_file: str | os.PathLike):
     """
-    获取目录下最新的 CIF 文件，解析结构并返回用于绘图的 DataFrame。
+    解析指定 CIF 文件，返回用于绘图的 DataFrame。
     """
-    cif_dir_str = str(cif_dir)
-    print("-" * 50)
-    print(f"DEBUG: 脚本所在位置: {CURRENT_SCRIPT_DIR}")
-    print(f"DEBUG: 正在扫描目标: {cif_dir_str}")
-
     if not HAS_PYMATGEN:
-        print("DEBUG: 缺少 pymatgen")
         return None, None, None, None
 
-    search_pattern = os.path.join(cif_dir_str, "*.cif")
-    list_of_files = glob.glob(search_pattern)
-
-    print(f"DEBUG: 找到文件数量: {len(list_of_files)}")
-
-    if not list_of_files:
+    cif_path = str(cif_file)
+    if not os.path.exists(cif_path):
         return None, None, None, None
 
-    latest_file = max(list_of_files, key=os.path.getctime)
-    filename = os.path.basename(latest_file)
-    print(f"DEBUG: 成功锁定最新文件: {filename}")
+    filename = os.path.basename(cif_path)
 
     try:
-        structure = Structure.from_file(latest_file)
-    except Exception as e:
-        print(f"DEBUG: 文件解析失败: {e}")
+        structure = Structure.from_file(cif_path)
+    except Exception:
         return None, None, None, None
 
     lattice = structure.lattice
@@ -85,3 +72,31 @@ def get_latest_cif_info(cif_dir: str | os.PathLike = CIF_DIR):
         xrd_df = pd.DataFrame()
 
     return filename, lattice_df, comp_df, xrd_df
+
+
+def get_latest_cif_info(cif_dir: str | os.PathLike = CIF_DIR):
+    """
+    获取目录下最新的 CIF 文件，解析结构并返回用于绘图的 DataFrame。
+    """
+    cif_dir_str = str(cif_dir)
+    print("-" * 50)
+    print(f"DEBUG: 脚本所在位置: {CURRENT_SCRIPT_DIR}")
+    print(f"DEBUG: 正在扫描目标: {cif_dir_str}")
+
+    if not HAS_PYMATGEN:
+        print("DEBUG: 缺少 pymatgen")
+        return None, None, None, None
+
+    search_pattern = os.path.join(cif_dir_str, "*.cif")
+    list_of_files = glob.glob(search_pattern)
+
+    print(f"DEBUG: 找到文件数量: {len(list_of_files)}")
+
+    if not list_of_files:
+        return None, None, None, None
+
+    latest_file = max(list_of_files, key=os.path.getctime)
+    filename = os.path.basename(latest_file)
+    print(f"DEBUG: 成功锁定最新文件: {filename}")
+
+    return get_cif_info(latest_file)

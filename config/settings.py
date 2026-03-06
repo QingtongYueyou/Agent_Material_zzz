@@ -19,3 +19,6 @@ SPLAT_DIR.mkdir(parents=True, exist_ok=True)
 MP_API_KEY = os.getenv("MP_API_KEY") or os.getenv("MAPI_KEY")
 POE_API_KEY = os.getenv("POE_API_KEY")
 POE_API_BASE_URL = os.getenv("POE_API_BASE_URL", "https://api.poe.com/v1")
+
+LLM_MODEL_ID = os.getenv("LLM_MODEL_ID", "GPT-4o")
+LLM_TIMEOUT_SEC = int(os.getenv("LLM_TIMEOUT_SEC", "45"))

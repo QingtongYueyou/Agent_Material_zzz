@@ -1,20 +1,10 @@
 from __future__ import annotations
 
-import glob
-import os
-
 import streamlit as st
 
-from config.settings import CIF_DIR
-from core.agent import materials_agent
-from core.processor import get_latest_cif_info
+from core.workflow import WorkflowOrchestrator
 from ui.chat import render_chat_panel
-from ui.components import (
-    get_agent_response_stream,
-    render_debug_sidebar,
-    render_task_panel,
-    render_top_bar,
-)
+from ui.components import render_debug_sidebar, render_task_panel, render_top_bar
 from ui.styles import apply_styles
 from ui.visualization import render_visualization_panel
 
@@ -24,10 +14,9 @@ def _init_session_state() -> None:
         "messages": [],
         "viz_data": None,
         "last_question": "",
-        "tasks": [],
-        "table_df": None,
+        "workflow_trace": [],
+        "trace_id": "",
         "selected_task_id": None,
-        "selected_material": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -53,6 +42,7 @@ with col_left:
 if user_input:
     st.session_state.last_question = user_input
     st.session_state.messages.append({"role": "user", "content": user_input})
+    st.session_state.workflow_trace = []
     st.session_state.processing = True
     st.rerun()
 
@@ -60,39 +50,50 @@ with col_middle:
     render_visualization_panel()
 
 with col_right:
-    log_container = st.empty()
-    render_task_panel(log_container)
+    render_task_panel()
 
 if st.session_state.get("processing", False):
     with col_left:
         try:
             user_question = st.session_state.last_question
+            orchestrator = WorkflowOrchestrator()
 
-            files = glob.glob(os.path.join(str(CIF_DIR), "*"))
-            for f in files:
-                try:
-                    os.remove(f)
-                except Exception:
-                    pass
+            final_payload = None
+            for event in orchestrator.run_stream(user_question):
+                if event.get("type") == "step_end":
+                    st.session_state.workflow_trace.append(
+                        {
+                            "step_name": event.get("step"),
+                            "status": event.get("status"),
+                            "latency_ms": event.get("latency_ms", 0),
+                            "error_message": event.get("error"),
+                            "fallback_used": event.get("fallback_used", False),
+                        }
+                    )
+                elif event.get("type") == "final":
+                    final_payload = event
 
-            st.session_state.agent_logs = []
+            if final_payload is None:
+                final_payload = {
+                    "answer": "工作流未返回最终结果。",
+                    "step_results": st.session_state.workflow_trace,
+                    "viz": None,
+                    "trace_id": "",
+                }
+
+            st.session_state.trace_id = final_payload.get("trace_id", "")
+            st.session_state.workflow_trace = final_payload.get("step_results", st.session_state.workflow_trace)
 
             with st.chat_message("assistant"):
-                reply_text = st.write_stream(
-                    get_agent_response_stream(materials_agent, user_question, log_container)
-                )
+                st.markdown(final_payload.get("answer", ""))
 
-            st.session_state.messages.append({"role": "assistant", "content": reply_text})
+            st.session_state.messages.append(
+                {"role": "assistant", "content": final_payload.get("answer", "")}
+            )
 
-            cif_name, lat_df, el_df, xrd_df = get_latest_cif_info()
-
-            if cif_name:
-                st.session_state.viz_data = {
-                    "filename": cif_name,
-                    "lattice_df": lat_df,
-                    "comp_df": el_df,
-                    "xrd_df": xrd_df,
-                }
+            viz_data = final_payload.get("viz")
+            if isinstance(viz_data, dict) and viz_data.get("filename"):
+                st.session_state.viz_data = viz_data
 
         except Exception as e:
             st.error(f"运行出错: {e}")

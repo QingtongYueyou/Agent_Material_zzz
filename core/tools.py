@@ -9,8 +9,7 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from config.settings import CIF_DIR, MP_API_KEY
 
 
-@tool(show_result=False)
-def get_mp_structure(identifier: str) -> dict:
+def get_mp_structure_raw(identifier: str) -> dict:
     """
     从 Materials Project 获取结构信息，并导出 CIF 到本地文件。
 
@@ -36,20 +35,44 @@ def get_mp_structure(identifier: str) -> dict:
             structure = mpr.get_structure_by_material_id(identifier)
             mp_id = identifier
         else:
+            target_formula = identifier.strip()
             docs = mpr.materials.summary.search(
-                formula=identifier,
-                fields=["material_id", "structure"],
+                formula=target_formula,
+                fields=["material_id", "structure", "formula_pretty"],
             )
             if not docs:
                 return {"error": f"在 Materials Project 中找不到匹配 {identifier} 的材料。"}
 
-            doc = docs[0]
+            # Prefer exact formula match to avoid grabbing a different compound.
+            exact_docs = []
+            for d in docs:
+                pretty = str(getattr(d, "formula_pretty", "") or "").strip()
+                reduced = ""
+                try:
+                    reduced = str(d.structure.composition.reduced_formula).strip()
+                except Exception:
+                    reduced = ""
+                if (
+                    pretty.lower() == target_formula.lower()
+                    or reduced.lower() == target_formula.lower()
+                ):
+                    exact_docs.append(d)
+
+            if not exact_docs:
+                return {
+                    "error": (
+                        f"在 Materials Project 中未找到与 {target_formula} 完全一致的化学式结果。"
+                    )
+                }
+
+            doc = exact_docs[0]
             mp_id = str(doc.material_id)
             structure = doc.structure
 
     sga = SpacegroupAnalyzer(structure)
     spg_symbol = sga.get_space_group_symbol()
     spg_number = sga.get_space_group_number()
+    crystal_system = sga.get_crystal_system()
     formula, _ = structure.composition.get_reduced_formula_and_factor()
 
     cif_text = structure.to(fmt="cif")
@@ -63,13 +86,13 @@ def get_mp_structure(identifier: str) -> dict:
         "formula": formula,
         "spacegroup_symbol": spg_symbol,
         "spacegroup_number": spg_number,
+        "crystal_system": crystal_system,
         "cif_path": str(cif_path),
         "cif": cif_text,
     }
 
 
-@tool(show_result=False)
-def search_materials_by_criteria(
+def search_materials_by_criteria_raw(
     elements: list[str] | None = None,
     band_gap_min: float | None = None,
     band_gap_max: float | None = None,
@@ -138,9 +161,31 @@ def search_materials_by_criteria(
 
         except TypeError as te:
             if "default_factory" in str(te):
-                return (
-                    "系统错误：库版本冲突。请尝试升级 mp-api 或使用当前的兼容模式代码。"
-                )
+                return "系统错误：库版本冲突。请尝试升级 mp-api 或使用当前的兼容模式代码。"
             return f"参数类型错误: {str(te)}"
         except Exception as e:
             return f"搜索 API 调用出错: {str(e)}"
+
+
+@tool(show_result=False)
+def get_mp_structure(identifier: str) -> dict:
+    return get_mp_structure_raw(identifier)
+
+
+@tool(show_result=False)
+def search_materials_by_criteria(
+    elements: list[str] | None = None,
+    band_gap_min: float | None = None,
+    band_gap_max: float | None = None,
+    is_stable: bool | None = None,
+    crystal_system: str | None = None,
+    max_results: int = 10,
+) -> str:
+    return search_materials_by_criteria_raw(
+        elements=elements,
+        band_gap_min=band_gap_min,
+        band_gap_max=band_gap_max,
+        is_stable=is_stable,
+        crystal_system=crystal_system,
+        max_results=max_results,
+    )

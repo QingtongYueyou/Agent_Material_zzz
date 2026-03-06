@@ -1,50 +1,38 @@
-# MaterialProject
+# Agent 项目总览
 
-## 运行
+## 项目定位
+这是一个面向材料科学场景的智能分析应用，核心能力包括：
+- 根据用户问题进行意图识别
+- 调用 Materials Project 获取材料结构
+- 解析 CIF 并生成晶体结构相关数据
+- 渲染 3D 与图表可视化
+- 生成面向用户的中文分析回答
 
+## 目录结构
+- `config/`：配置与环境变量管理
+- `core/`：工作流编排、工具调用、数据处理、LLM 生成
+- `ui/`：前端组件、样式、可视化渲染
+- `static/`：静态资源目录
+- `static/splat_files/`：3D Gaussian Splatting 模型文件
+- `cif_files/`：CIF 缓存目录
+
+## 主流程
+1. 用户在 `app.py` 发起问题输入。
+2. `core/workflow.py` 按步骤执行：意图识别 -> 检索 -> 结构解析 -> 可视化准备 -> 答案组装。
+3. `core/tools.py` 调用 MP API 并写入 CIF。
+4. `core/processor.py` 解析本次 CIF 生成晶格、组分、XRD 数据。
+5. `ui/visualization.py` 渲染 3DGS 与图表。
+6. `core/answer_generator.py` 基于事实数据生成最终回答，失败时回退模板。
+
+## 启动方式
 ```bash
 streamlit run app.py
 ```
 
-## 模块结构
+## 关键依赖
+- `streamlit`
+- `mp-api`
+- `pymatgen`
+- `agno`
 
-### 入口与配置
-- `app.py`
-  - 设置 Streamlit 页面参数与初始化状态
-  - 组合三栏布局并调用各 UI 组件
-  - 负责对话触发、流式输出与数据刷新
-- `config/settings.py`
-  - 统一加载 `.env` 配置
-  - 管理路径常量（`cif_files/`, `static/`, `splat_files/`）
-  - 初始化目录并暴露 API Key
 
-### 核心逻辑
-- `core/agent.py`
-  - 定义 Agno Agent（模型、工具、提示词）
-  - 绑定材料检索/结构解析工具
-- `core/tools.py`
-  - `get_mp_structure`：从 Materials Project 拉取结构并保存 CIF
-  - `search_materials_by_criteria`：按条件检索材料并返回 JSON
-- `core/processor.py`
-  - 从 CIF 解析晶格与组分
-  - 生成 XRD 模拟数据
-  - 负责返回可视化所需的 DataFrame
-
-### UI 组件
-- `ui/styles.py`
-  - 全局 CSS 样式与主题定义
-- `ui/chat.py`
-  - 左侧聊天面板（历史消息 + 输入框）
-- `ui/visualization.py`
-  - 中栏可视化：Altair 图表 + 3DGS 视图
-  - 内置静态资源服务（CORS）以加载 splat 模型
-- `ui/components.py`
-  - 顶部栏组件
-  - 任务流与 Agent 日志渲染
-  - 右侧数据追溯与调试侧栏
-
-## 说明
-
-- `.env` 存放 API Key，建议仅本地保存
-- CIF 缓存目录：`cif_files/`
-- 3D splat 资源：`static/splat_files/`

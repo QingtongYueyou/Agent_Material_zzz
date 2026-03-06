@@ -81,13 +81,18 @@ def render_visualization_panel() -> None:
     )
 
     cif_basename = os.path.splitext(filename)[0]
-    material_name = filename.split("_")[0]
+    parts = cif_basename.split("_", 1)
+    material_name = parts[0]
+    formula_name = parts[1] if len(parts) > 1 else ""
 
     search_candidates = [
         os.path.join(SPLAT_DIR, f"{cif_basename}.ply"),
         os.path.join(SPLAT_DIR, f"{cif_basename}.splat"),
         os.path.join(SPLAT_DIR, f"{material_name}.ply"),
         os.path.join(SPLAT_DIR, f"{material_name}.splat"),
+        os.path.join(SPLAT_DIR, f"{formula_name}.ply") if formula_name else "",
+        os.path.join(SPLAT_DIR, f"{formula_name}.splat") if formula_name else "",
+        f"GLOB:{os.path.join(SPLAT_DIR, f'*{formula_name}*.ply')}" if formula_name else "",
         f"GLOB:{os.path.join(SPLAT_DIR, f'*{material_name}*.ply')}",
         os.path.join(SPLAT_DIR, "object.ply"),
     ]
@@ -95,6 +100,8 @@ def render_visualization_panel() -> None:
     found_splat_path = None
 
     for candidate in search_candidates:
+        if not candidate:
+            continue
         if candidate.startswith("GLOB:"):
             import glob
 
@@ -119,12 +126,12 @@ def render_visualization_panel() -> None:
         elif file_ext == ".ksplat":
             format_enum = "GaussianSplats3D.SceneFormat.KSplat"
 
-        if file_name_only == "object.ply" and material_name not in file_name_only:
+        if file_name_only == "object.ply":
             st.caption(f"ℹ️ 未找到专属模型，展示测试文件: `{file_name_only}`")
         else:
             st.caption(f"✅ 已加载模型: `{file_name_only}`")
 
-            gs_html = f"""
+        gs_html = f"""
                     <!DOCTYPE html>
                     <html lang="en">
                     <head>
@@ -235,7 +242,7 @@ def render_visualization_panel() -> None:
                     </body>
                     </html>
                     """
-            components.html(gs_html, height=350)
+        components.html(gs_html, height=350)
     else:
         st.warning("⚠️ 在 `static/splat_files` 中未找到匹配的模型文件。")
         st.markdown(f"<small>搜索路径: {SPLAT_DIR}</small>", unsafe_allow_html=True)
