@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
 from functools import partial
@@ -10,13 +11,53 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from config.settings import BASE_DIR, SPLAT_DIR
+from core.perf_metrics import (
+    append_interaction_metric,
+    append_render_metric,
+    get_ply_vertex_count,
+)
 from core.processor import HAS_PYMATGEN
 
 
 class _CORSRequestHandler(SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
+
+    def do_POST(self):
+        if self.path not in {"/__perf/render-metrics", "/__perf/interaction-metrics"}:
+            self.send_error(404, "Not Found")
+            return
+
+        content_length = int(self.headers.get("Content-Length", "0") or 0)
+        payload = self.rfile.read(content_length) if content_length > 0 else b"{}"
+
+        try:
+            data = json.loads(payload.decode("utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("Payload must be a JSON object")
+
+            if self.path == "/__perf/render-metrics":
+                append_render_metric(data)
+            else:
+                append_interaction_metric(data)
+        except Exception as exc:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": False, "error": str(exc)}).encode("utf-8"))
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b'{"ok": true}')
 
 
 @st.cache_resource
@@ -115,11 +156,16 @@ def render_visualization_panel() -> None:
 
     if found_splat_path:
         file_name_only = os.path.basename(found_splat_path)
+        file_ext = os.path.splitext(file_name_only)[1].lower()
+        vertex_count = get_ply_vertex_count(found_splat_path)
+        vertex_count_label = "未知" if vertex_count is None else str(vertex_count)
+        file_size_bytes = os.path.getsize(found_splat_path)
 
         port = _ensure_static_server(str(BASE_DIR), port=8001)
         model_url = f"http://127.0.0.1:{port}/static/splat_files/{file_name_only}"
+        metrics_url = f"http://127.0.0.1:{port}/__perf/render-metrics"
+        interaction_metrics_url = f"http://127.0.0.1:{port}/__perf/interaction-metrics"
 
-        file_ext = os.path.splitext(file_name_only)[1].lower()
         format_enum = "GaussianSplats3D.SceneFormat.Ply"
         if file_ext == ".splat":
             format_enum = "GaussianSplats3D.SceneFormat.Splat"
@@ -157,6 +203,63 @@ def render_visualization_panel() -> None:
                                 border: 1px solid rgba(255,255,255,0.1);
                                 font-family: monospace;
                             }}
+
+                            #perf-panel {{
+                                position: absolute;
+                                left: 10px;
+                                top: 10px;
+                                z-index: 101;
+                                display: flex;
+                                flex-direction: column;
+                                gap: 8px;
+                                max-width: 240px;
+                            }}
+
+                            #perf-button {{
+                                border: none;
+                                border-radius: 6px;
+                                background: rgba(15, 23, 42, 0.86);
+                                color: white;
+                                padding: 8px 10px;
+                                font-size: 12px;
+                                cursor: pointer;
+                            }}
+
+                            #perf-button:hover {{
+                                background: rgba(30, 41, 59, 0.92);
+                            }}
+
+                            #perf-summary {{
+                                background: rgba(255, 255, 255, 0.92);
+                                color: #0f172a;
+                                border-radius: 8px;
+                                padding: 8px 10px;
+                                font-size: 12px;
+                                line-height: 1.45;
+                                box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15);
+                            }}
+
+                            #perf-toggle {{
+                                border: none;
+                                border-radius: 6px;
+                                background: rgba(255, 255, 255, 0.92);
+                                color: #0f172a;
+                                padding: 8px 10px;
+                                font-size: 12px;
+                                cursor: pointer;
+                                box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15);
+                                text-align: left;
+                            }}
+
+                            #perf-tools {{
+                                display: none;
+                                flex-direction: column;
+                                gap: 8px;
+                            }}
+
+                            #perf-tools.visible {{
+                                display: flex;
+                            }}
                         </style>
                         <script type="importmap">
                         {{
@@ -169,6 +272,17 @@ def render_visualization_panel() -> None:
                     </head>
                     <body>
                         <div id="container"></div>
+                        <div id="perf-panel">
+                            <button id="perf-toggle" type="button">显示测试面板</button>
+                            <div id="perf-tools">
+                                <button id="perf-button" type="button">测试渲染</button>
+                                <div id="perf-summary">
+                                    模型: {file_name_only}<br/>
+                                    顶点数: {vertex_count_label}<br/>
+                                    打开测试面板后可记录渲染和交互延迟
+                                </div>
+                            </div>
+                        </div>
 
                         <div id="loading" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); background:rgba(0,0,0,0.7); color:white; padding:10px 20px; border-radius:8px; font-size:14px; display:flex; align-items:center; gap:10px;">
                             <div style="width:16px; height:16px; border:2px solid white; border-top-color:transparent; border-radius:50%; animation:spin 1s linear infinite;"></div>
@@ -186,38 +300,159 @@ def render_visualization_panel() -> None:
                             const loadingLabel = document.getElementById('loading');
                             const fpsDiv = document.getElementById('fps-display');
                             const progressText = document.getElementById('progress-text');
+                            const perfToggle = document.getElementById('perf-toggle');
+                            const perfTools = document.getElementById('perf-tools');
+                            const perfButton = document.getElementById('perf-button');
+                            const perfSummary = document.getElementById('perf-summary');
 
-                            const viewer = new GaussianSplats3D.Viewer({{
-                                'rootElement': container,
-                                'cameraUp': [0, 1, 0],
-                                'initialCameraPosition': [2, 2, 5],
-                                'initialCameraLookAt': [0, 0, 0],
-                                'selfDrivenMode': true,
-                                'useBuiltInControls': true,
-                                'sharedMemoryForWorkers': false,
-                                'gpuAcceleratedSort': false
-                            }});
+                            let fpsLoopStarted = false;
+                            let runCounter = 0;
+                            let interactionEnabled = false;
+                            let pendingInteraction = null;
 
-                            viewer.addSplatScene("{model_url}", {{
-                                'format': {format_enum},
-                                'scale': [1, 1, 1],
-                                'splatAlphaRemovalThreshold': 5,
-                                'showLoadingUI': false
-                            }})
-                            .then(() => {{
-                                viewer.start();
-                                loadingLabel.style.display = 'none';
+                            function updateSummary(lines) {{
+                                perfSummary.innerHTML = lines.join('<br/>');
+                            }}
 
+                            function postMetrics(record) {{
+                                fetch("{metrics_url}", {{
+                                    method: "POST",
+                                    headers: {{
+                                        "Content-Type": "application/json"
+                                    }},
+                                    body: JSON.stringify(record),
+                                    keepalive: true
+                                }}).catch((err) => console.error("Metrics upload error:", err));
+                            }}
+
+                            function postInteractionMetrics(record) {{
+                                fetch("{interaction_metrics_url}", {{
+                                    method: "POST",
+                                    headers: {{
+                                        "Content-Type": "application/json"
+                                    }},
+                                    body: JSON.stringify(record),
+                                    keepalive: true
+                                }}).catch((err) => console.error("Interaction metrics upload error:", err));
+                            }}
+
+                            function cameraSnapshot(activeViewer) {{
+                                const camera = activeViewer.camera;
+                                if (!camera) {{
+                                    return null;
+                                }}
+
+                                return {{
+                                    position: [camera.position.x, camera.position.y, camera.position.z],
+                                    quaternion: [camera.quaternion.x, camera.quaternion.y, camera.quaternion.z, camera.quaternion.w]
+                                }};
+                            }}
+
+                            function hasCameraChanged(before, after) {{
+                                if (!before || !after) {{
+                                    return false;
+                                }}
+
+                                const valuesBefore = before.position.concat(before.quaternion);
+                                const valuesAfter = after.position.concat(after.quaternion);
+
+                                for (let i = 0; i < valuesBefore.length; i += 1) {{
+                                    if (Math.abs(valuesBefore[i] - valuesAfter[i]) > 1e-4) {{
+                                        return true;
+                                    }}
+                                }}
+
+                                return false;
+                            }}
+
+                            function armInteractionMeasurement(activeViewer, interactionType, eventType) {{
+                                if (!interactionEnabled) {{
+                                    return;
+                                }}
+
+                                pendingInteraction = {{
+                                    interactionType,
+                                    eventType,
+                                    startTs: performance.now(),
+                                    baseline: cameraSnapshot(activeViewer),
+                                    recorded: false
+                                }};
+
+                                updateSummary([
+                                    `模型: {file_name_only}`,
+                                    `顶点数: {vertex_count_label}`,
+                                    `交互测试: ${{interactionType}}`,
+                                    '状态: 等待相机发生变化...'
+                                ]);
+                            }}
+
+                            function maybeRecordInteraction(activeViewer) {{
+                                if (!pendingInteraction || pendingInteraction.recorded) {{
+                                    return;
+                                }}
+
+                                const current = cameraSnapshot(activeViewer);
+                                if (!hasCameraChanged(pendingInteraction.baseline, current)) {{
+                                    return;
+                                }}
+
+                                const latencyMs = Number((performance.now() - pendingInteraction.startTs).toFixed(3));
+                                pendingInteraction.recorded = true;
+
+                                const metric = {{
+                                    event_type: pendingInteraction.eventType,
+                                    model_name: "{file_name_only}",
+                                    model_format: "{file_ext.lstrip('.')}",
+                                    vertex_count: {json.dumps(vertex_count)},
+                                    file_size_bytes: {file_size_bytes},
+                                    interaction_type: pendingInteraction.interactionType,
+                                    input_to_camera_change_ms: latencyMs,
+                                    viewport_width: window.innerWidth,
+                                    viewport_height: window.innerHeight,
+                                    user_agent: navigator.userAgent
+                                }};
+
+                                postInteractionMetrics(metric);
+                                updateSummary([
+                                    `模型: {file_name_only}`,
+                                    `顶点数: {vertex_count_label}`,
+                                    `交互: ${{pendingInteraction.interactionType}}`,
+                                    `input->camera change: ${{latencyMs}} ms`
+                                ]);
+                            }}
+
+                            function createViewer() {{
+                                container.innerHTML = '';
+                                return new GaussianSplats3D.Viewer({{
+                                    'rootElement': container,
+                                    'cameraUp': [0, 1, 0],
+                                    'initialCameraPosition': [2, 2, 5],
+                                    'initialCameraLookAt': [0, 0, 0],
+                                    'selfDrivenMode': true,
+                                    'useBuiltInControls': true,
+                                    'sharedMemoryForWorkers': false,
+                                    'gpuAcceleratedSort': false
+                                }});
+                            }}
+
+                            function startFPSLoop() {{
+                                if (fpsLoopStarted) {{
+                                    return;
+                                }}
+
+                                fpsLoopStarted = true;
                                 let frameCount = 0;
                                 let lastTime = performance.now();
 
                                 function updateFPS() {{
                                     const now = performance.now();
                                     frameCount++;
+                                    if (window.__perfViewerRef) {{
+                                        maybeRecordInteraction(window.__perfViewerRef);
+                                    }}
 
                                     if (now - lastTime >= 500) {{
                                         const fps = Math.round((frameCount * 1000) / (now - lastTime));
-
                                         fpsDiv.innerText = `FPS: ${{fps}}`;
 
                                         if (fps >= 40) fpsDiv.style.color = '#4ade80';
@@ -232,12 +467,100 @@ def render_visualization_panel() -> None:
                                 }}
 
                                 requestAnimationFrame(updateFPS);
-                            }})
-                            .catch((err) => {{
-                                console.error("Splat load error:", err);
-                                loadingLabel.style.background = "rgba(220, 38, 38, 0.9)";
-                                progressText.innerText = "Error: Check Console";
+                            }}
+
+                            function loadScene(eventType) {{
+                                const clickTs = performance.now();
+                                const requestStartTs = performance.now();
+                                runCounter += 1;
+                                const runId = runCounter;
+                                const activeViewer = createViewer();
+                                window.__perfViewerRef = activeViewer;
+                                pendingInteraction = null;
+
+                                loadingLabel.style.display = 'flex';
+                                loadingLabel.style.background = 'rgba(0,0,0,0.7)';
+                                progressText.innerText = 'Loading...';
+                                perfButton.disabled = true;
+
+                                updateSummary([
+                                    '模型: {file_name_only}',
+                                    '顶点数: {vertex_count_label}',
+                                    '状态: 测试中...'
+                                ]);
+
+                                activeViewer.addSplatScene("{model_url}", {{
+                                    'format': {format_enum},
+                                    'scale': [1, 1, 1],
+                                    'splatAlphaRemovalThreshold': 5,
+                                    'showLoadingUI': false
+                                }})
+                                .then(() => {{
+                                    const sceneReadyTs = performance.now();
+                                    activeViewer.start();
+                                    loadingLabel.style.display = 'none';
+                                    startFPSLoop();
+
+                                    requestAnimationFrame(() => {{
+                                        const firstFrameTs = performance.now();
+                                        const metric = {{
+                                            event_type: eventType,
+                                            model_name: "{file_name_only}",
+                                            model_format: "{file_ext.lstrip('.')}",
+                                            vertex_count: {json.dumps(vertex_count)},
+                                            file_size_bytes: {file_size_bytes},
+                                            click_to_request_start_ms: Number((requestStartTs - clickTs).toFixed(3)),
+                                            request_start_to_scene_ready_ms: Number((sceneReadyTs - requestStartTs).toFixed(3)),
+                                            scene_ready_to_first_frame_ms: Number((firstFrameTs - sceneReadyTs).toFixed(3)),
+                                            click_to_first_frame_ms: Number((firstFrameTs - clickTs).toFixed(3)),
+                                            viewport_width: window.innerWidth,
+                                            viewport_height: window.innerHeight,
+                                            user_agent: navigator.userAgent
+                                        }};
+
+                                        postMetrics(metric);
+                                        updateSummary([
+                                            `模型: {file_name_only}`,
+                                            `顶点数: {vertex_count_label}`,
+                                            `事件: ${{eventType}} #${{runId}}`,
+                                            `click->first frame: ${{metric.click_to_first_frame_ms}} ms`,
+                                            `request->ready: ${{metric.request_start_to_scene_ready_ms}} ms`,
+                                            `ready->frame: ${{metric.scene_ready_to_first_frame_ms}} ms`
+                                        ]);
+                                        perfButton.disabled = false;
+                                    }});
+                                }})
+                                .catch((err) => {{
+                                    console.error("Splat load error:", err);
+                                    loadingLabel.style.display = 'flex';
+                                    loadingLabel.style.background = "rgba(220, 38, 38, 0.9)";
+                                    progressText.innerText = "Error: Check Console";
+                                    updateSummary([
+                                        '模型: {file_name_only}',
+                                        '顶点数: {vertex_count_label}',
+                                        '状态: 加载失败，请查看控制台'
+                                    ]);
+                                    perfButton.disabled = false;
+                                }});
+                            }}
+
+                            perfToggle.addEventListener('click', () => {{
+                                interactionEnabled = !interactionEnabled;
+                                perfTools.classList.toggle('visible', interactionEnabled);
+                                perfToggle.innerText = interactionEnabled ? '隐藏测试面板' : '显示测试面板';
                             }});
+                            perfButton.addEventListener('click', () => loadScene('manual_retest'));
+                            container.addEventListener('pointerdown', () => {{
+                                if (window.__perfViewerRef) {{
+                                    armInteractionMeasurement(window.__perfViewerRef, 'rotate_or_pan', 'pointerdown');
+                                }}
+                            }});
+                            container.addEventListener('wheel', () => {{
+                                if (window.__perfViewerRef) {{
+                                    armInteractionMeasurement(window.__perfViewerRef, 'zoom', 'wheel');
+                                }}
+                            }}, {{ passive: true }});
+                            loadScene('auto_initial');
                         </script>
                     </body>
                     </html>
