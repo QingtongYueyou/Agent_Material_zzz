@@ -15,7 +15,7 @@ def render_top_bar() -> None:
                 </div>
             </div>
             <div style="display: flex; gap: 0.8rem; align-items: center;">
-                <span class="badge badge-blue">可控工作流</span>
+                <span class="badge badge-blue">Function Calling</span>
             </div>
         </div>
         """,
@@ -25,11 +25,11 @@ def render_top_bar() -> None:
 
 def _label_for_step(step_name: str) -> str:
     labels = {
-        "intent_recognition": "意图识别",
-        "retrieval": "检索",
-        "structure_analysis": "结构解析",
+        "function_calling": "工具决策",
+        "search_materials_by_criteria": "材料检索",
+        "get_mp_structure": "结构获取",
         "visualization_generation": "可视化准备",
-        "answer_composition": "答案组装",
+        "answer_composition": "答案生成",
     }
     return labels.get(step_name, step_name)
 
@@ -41,7 +41,7 @@ def render_agent_logs() -> None:
         """
         <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.8rem;">
             <span class="section-label label-c">C</span>
-            <span style="font-size: 1rem; font-weight: 700; color: #1a202c;">工作流执行轨迹</span>
+            <span style="font-size: 1rem; font-weight: 700; color: #1a202c;">执行轨迹</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -51,7 +51,7 @@ def render_agent_logs() -> None:
         st.markdown(
             """
             <div class="card" style="text-align: center; padding: 2rem 1rem; color: #94a3b8;">
-                <div>等待工作流启动...</div>
+                <div>等待任务启动...</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -63,9 +63,9 @@ def render_agent_logs() -> None:
 
     icon_map = {
         "success": "✓",
-        "failed": "✗",
+        "failed": "✕",
         "skipped": "○",
-        "running": "⟳",
+        "running": "…",
     }
 
     for row in trace:
@@ -75,7 +75,7 @@ def render_agent_logs() -> None:
         err = row.get("error_message")
         fallback = row.get("fallback_used", False)
 
-        icon = icon_map.get(status, "⟳")
+        icon = icon_map.get(status, "…")
         status_class = "done" if status == "success" else "running"
         detail = f"状态: {status} | 耗时: {latency_ms} ms"
         if fallback:
@@ -105,7 +105,7 @@ def render_task_panel() -> None:
         <div style="margin-top: 1rem;">
             <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.8rem;">
                 <span class="section-label label-c">D</span>
-                <span style="font-size: 1rem; font-weight: 700; color: #1a202c;">数据追溯</span>
+                <span style="font-size: 1rem; font-weight: 700; color: #1a202c;">数据摘要</span>
             </div>
         </div>
         """,
@@ -133,7 +133,7 @@ def render_debug_sidebar() -> None:
         files = list(CIF_DIR.iterdir())
         st.write(f"文件数量: {len(files)}")
         if files:
-            st.write("最新文件:")
+            st.write("最新文件")
             st.code(files[-1].name)
         else:
             st.warning("文件夹为空")

@@ -160,9 +160,10 @@ def render_visualization_panel() -> None:
         vertex_count = get_ply_vertex_count(found_splat_path)
         vertex_count_label = "未知" if vertex_count is None else str(vertex_count)
         file_size_bytes = os.path.getsize(found_splat_path)
+        file_mtime = int(os.path.getmtime(found_splat_path))
 
         port = _ensure_static_server(str(BASE_DIR), port=8001)
-        model_url = f"http://127.0.0.1:{port}/static/splat_files/{file_name_only}"
+        model_url = f"http://127.0.0.1:{port}/static/splat_files/{file_name_only}?v={file_mtime}"
         metrics_url = f"http://127.0.0.1:{port}/__perf/render-metrics"
         interaction_metrics_url = f"http://127.0.0.1:{port}/__perf/interaction-metrics"
 

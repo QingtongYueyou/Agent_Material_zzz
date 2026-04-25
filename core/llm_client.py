@@ -17,14 +17,16 @@ def _chat_completions_url() -> str:
     return f"{base}/chat/completions"
 
 
-def chat_completion(
-    messages: list[dict[str, str]],
+def create_chat_completion(
+    messages: list[dict[str, Any]],
     *,
     model: str | None = None,
     temperature: float = 0.2,
     max_tokens: int = 900,
     timeout_sec: int | None = None,
-) -> str:
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if not POE_API_KEY:
         raise LLMClientError("POE_API_KEY ???")
 
@@ -34,6 +36,10 @@ def chat_completion(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    if tools:
+        payload["tools"] = tools
+    if tool_choice is not None:
+        payload["tool_choice"] = tool_choice
 
     req = urllib.request.Request(
         _chat_completions_url(),
@@ -59,6 +65,27 @@ def chat_completion(
 
     try:
         data = json.loads(body)
-        return data["choices"][0]["message"]["content"].strip()
+        return data["choices"][0]["message"]
     except Exception as e:
         raise LLMClientError(f"LLM ??????: {e}") from e
+
+
+def chat_completion(
+    messages: list[dict[str, Any]],
+    *,
+    model: str | None = None,
+    temperature: float = 0.2,
+    max_tokens: int = 900,
+    timeout_sec: int | None = None,
+) -> str:
+    message = create_chat_completion(
+        messages,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout_sec=timeout_sec,
+    )
+    content = message.get("content") or ""
+    if not isinstance(content, str):
+        raise LLMClientError("LLM ??????: message content is not text")
+    return content.strip()

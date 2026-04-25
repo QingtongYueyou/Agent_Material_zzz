@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from agno.tools import tool
 from mp_api.client import MPRester
@@ -189,3 +190,90 @@ def search_materials_by_criteria(
         crystal_system=crystal_system,
         max_results=max_results,
     )
+
+
+OPENAI_TOOL_SPECS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_mp_structure",
+            "description": (
+                "Retrieve a crystal structure from Materials Project by mp-id or exact formula, "
+                "save its CIF locally, and return structure metadata."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "identifier": {
+                        "type": "string",
+                        "description": "An mp-id like mp-149 or an exact formula like LiFePO4.",
+                    }
+                },
+                "required": ["identifier"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_materials_by_criteria",
+            "description": (
+                "Search Materials Project for materials matching filters such as elements, "
+                "band gap range, stability, and crystal system."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "elements": {
+                        "type": ["array", "null"],
+                        "items": {"type": "string"},
+                        "description": "Element symbols such as ['Li', 'Fe'].",
+                    },
+                    "band_gap_min": {
+                        "type": ["number", "null"],
+                        "description": "Minimum band gap in eV.",
+                    },
+                    "band_gap_max": {
+                        "type": ["number", "null"],
+                        "description": "Maximum band gap in eV.",
+                    },
+                    "is_stable": {
+                        "type": ["boolean", "null"],
+                        "description": "Whether to restrict to stable materials.",
+                    },
+                    "crystal_system": {
+                        "type": ["string", "null"],
+                        "description": "Crystal system filter.",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return.",
+                        "default": 5,
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
+    },
+]
+
+
+def execute_openai_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
+    if tool_name == "get_mp_structure":
+        identifier = str(arguments.get("identifier") or "").strip()
+        if not identifier:
+            return {"error": "identifier is required"}
+        return get_mp_structure_raw(identifier)
+
+    if tool_name == "search_materials_by_criteria":
+        return search_materials_by_criteria_raw(
+            elements=arguments.get("elements"),
+            band_gap_min=arguments.get("band_gap_min"),
+            band_gap_max=arguments.get("band_gap_max"),
+            is_stable=arguments.get("is_stable"),
+            crystal_system=arguments.get("crystal_system"),
+            max_results=int(arguments.get("max_results") or 5),
+        )
+
+    return {"error": f"Unknown tool: {tool_name}"}
