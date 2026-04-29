@@ -147,7 +147,8 @@ Server-B planner flow:
   - `mp-1192859_NaFePO4.cif`
 - `static/splat_files/` stores large PLY/SPLAT models for 3DGS visualization.
 - `metrics/raw/` stores render and interaction CSV data plus generated test PLY artifacts.
-- Some PLY files are very large, especially `static/splat_files/object.ply`; be careful with Git status, staging, copying, and deletion.
+- Generated metrics and 3D model assets are intentionally ignored by Git: `metrics/raw/*.csv`, `metrics/raw/*.ply`, `static/splat_files/*.ply`, `static/splat_files/*.splat`, and `static/splat_files/*.ksplat`.
+- Some PLY files are very large, especially `static/splat_files/object.ply`; keep them local or manage them through external artifact storage/Git LFS instead of normal Git.
 
 ## Known Project State Notes
 

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from config.settings import PLAN_API_TOKEN
@@ -15,6 +16,18 @@ app = FastAPI(
     version="0.1.0",
     description="Convert natural-language materials requests into server-A executable JSON tool calls.",
 )
+
+
+@app.exception_handler(Exception)
+def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "detail": "Internal planner service error.",
+            "error_type": exc.__class__.__name__,
+            "path": str(request.url.path),
+        },
+    )
 
 
 class PlanRequest(BaseModel):

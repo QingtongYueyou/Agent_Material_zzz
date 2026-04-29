@@ -7,3 +7,8 @@ __pycache__/
 *.pyc
 .idea/
 cif_files/*.cif
+metrics/raw/*.csv
+metrics/raw/*.ply
+static/splat_files/*.ply
+static/splat_files/*.splat
+static/splat_files/*.ksplat

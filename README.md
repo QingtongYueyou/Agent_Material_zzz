@@ -21,9 +21,11 @@
 - `docs/`：接口与部署说明
 - `ui/`：前端组件、样式、可视化渲染
 - `static/`：静态资源目录
-- `static/splat_files/`：3D Gaussian Splatting 模型文件
+- `static/splat_files/`：3D Gaussian Splatting 模型文件目录，本地放置 `.ply/.splat/.ksplat` 资产
 - `cif_files/`：CIF 缓存目录
 - `metrics/`：3DGS 渲染/交互性能数据和分析脚本
+
+注意：`static/splat_files/*.ply`、`metrics/raw/*.csv`、`metrics/raw/*.ply` 属于本地生成数据或大体积资产，默认被 `.gitignore` 忽略，不再随 Git 仓库分发。需要 3DGS 可视化时，请将模型文件放入 `static/splat_files/`。
 
 ## Streamlit 主流程
 1. 用户在 `app.py` 发起问题输入。
@@ -177,4 +179,3 @@ Authorization: Bearer replace-with-a-shared-secret
 - `altair`
 - `python-dotenv`
 - `numpy`
-

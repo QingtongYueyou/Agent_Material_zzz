@@ -53,6 +53,22 @@ _MP_ID_RE = re.compile(r"\bmp-\d+\b", re.IGNORECASE)
 _FORMULA_RE = re.compile(r"\b(?:[A-Z][a-z]?\d*){2,}\b")
 _ELEMENT_RE = re.compile(r"\b[A-Z][a-z]?\b")
 _BAND_GAP_MIN_RE = re.compile(r"(?:带隙|band\s*gap)[^\d]*(?:大于|高于|超过|>=|>|不少于)?\s*(\d+(?:\.\d+)?)\s*(?:eV)?", re.IGNORECASE)
+_FORMULA_TOKEN_RE = re.compile(r"([A-Z][a-z]?)(\d*)")
+
+ELEMENT_SYMBOLS = {
+    "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne",
+    "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca",
+    "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
+    "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr",
+    "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn",
+    "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd",
+    "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb",
+    "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg",
+    "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th",
+    "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm",
+    "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds",
+    "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og",
+}
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
@@ -88,6 +104,19 @@ def _string_or_none(value: Any) -> str | None:
     return None
 
 
+def _valid_formula(candidate: str) -> bool:
+    tokens = list(_FORMULA_TOKEN_RE.finditer(candidate))
+    if not tokens:
+        return False
+
+    rebuilt = "".join(match.group(0) for match in tokens)
+    if rebuilt != candidate:
+        return False
+
+    elements = [match.group(1) for match in tokens]
+    return len(elements) >= 2 and all(element in ELEMENT_SYMBOLS for element in elements)
+
+
 def _material_slots(query: str) -> dict[str, Any]:
     slots: dict[str, Any] = {
         "mp_id": None,
@@ -99,11 +128,14 @@ def _material_slots(query: str) -> dict[str, Any]:
     if mp_match:
         slots["mp_id"] = mp_match.group(0).lower()
 
-    formula_match = _FORMULA_RE.search(query)
-    if formula_match:
-        slots["formula"] = formula_match.group(0)
+    for formula_match in _FORMULA_RE.finditer(query):
+        candidate = formula_match.group(0)
+        if _valid_formula(candidate):
+            slots["formula"] = candidate
+            break
 
-    elements = list(dict.fromkeys(_ELEMENT_RE.findall(query)))
+    elements = [item for item in _ELEMENT_RE.findall(query) if item in ELEMENT_SYMBOLS]
+    elements = list(dict.fromkeys(elements))
     if elements:
         slots["elements"] = elements[:6]
 
