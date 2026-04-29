@@ -10,5 +10,13 @@ cif_files/*.cif
 metrics/raw/*.csv
 metrics/raw/*.ply
 static/splat_files/*.ply
+static/splat_files/*.spz
 static/splat_files/*.splat
 static/splat_files/*.ksplat
+static/splat_files/*.rad
+static/splat_files/*.radc
+static/splat_files/*.manifest.json
+static/splat_files/.spark_asset_pipeline_status.json
+
+# Spark build toolchain (vendored source, large)
+tools/vendor/

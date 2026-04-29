@@ -1,45 +1,45 @@
 # Planner API
 
-This project can run as server B: a lightweight LLM planner service that converts server A's natural-language user instruction into executable JSON tool calls.
+本项目可作为 Server B 运行：一个轻量级 LLM 规划服务，将 Server A 的用户自然语言指令转换为可执行的 JSON 工具调用。
 
-Server B does not query server A's database, retrieve files, push WebSocket messages, render UI, or generate the final user-facing answer. Server A owns those steps.
+Server B 不负责查询数据库、检索文件、推送 WebSocket 消息、渲染 UI 或生成最终用户回答。这些步骤由 Server A 执行。
 
-## Start Locally
+## 本地启动
 
-Use the existing conda test environment:
+使用现有的 conda 测试环境：
 
 ```powershell
 conda activate agno-assist
 uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 
-Health check:
+健康检查：
 
 ```powershell
 curl http://127.0.0.1:8000/health
 ```
 
-If conda activation is unavailable in the current shell, use the environment Python directly:
+如果当前 shell 无法激活 conda，可直接使用环境 Python：
 
 ```powershell
 C:\Users\wyfz\.conda\envs\agno-assist\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 
-## Optional Auth
+## 可选认证
 
-Set a shared token in `.env`:
+在 `.env` 中设置共享令牌：
 
 ```env
 PLAN_API_TOKEN=replace-with-a-shared-secret
 ```
 
-When `PLAN_API_TOKEN` is set, server A must call the API with:
+设置 `PLAN_API_TOKEN` 后，Server A 调用 API 时需携带：
 
 ```http
 Authorization: Bearer replace-with-a-shared-secret
 ```
 
-## Plan Endpoint
+## 规划接口
 
 ```http
 POST /api/v1/plan
@@ -47,7 +47,7 @@ Content-Type: application/json
 Authorization: Bearer replace-with-a-shared-secret
 ```
 
-Request:
+请求示例：
 
 ```json
 {
@@ -66,7 +66,7 @@ Request:
 }
 ```
 
-Response:
+响应示例：
 
 ```json
 {
@@ -126,34 +126,34 @@ Response:
 }
 ```
 
-If the LLM is unavailable or returns invalid JSON, server B returns a conservative rule-based fallback with `planner_meta.source` starting with `fallback:`.
+如果 LLM 不可用或返回无效 JSON，Server B 会返回基于规则的保守降级方案，`planner_meta.source` 以 `fallback:` 开头。
 
-## HTTPS Tunnel for Local Deployment
+## 本地部署 HTTPS 隧道
 
-For development, expose the local API with Cloudflare Tunnel:
+开发阶段可使用 Cloudflare Tunnel 暴露本地 API：
 
 ```powershell
 cloudflared tunnel --url http://127.0.0.1:8000
 ```
 
-Cloudflare returns an HTTPS URL such as:
+Cloudflare 会返回一个 HTTPS 地址，例如：
 
 ```text
 https://example.trycloudflare.com
 ```
 
-Give server A:
+将以下信息提供给 Server A：
 
-- Base URL: `https://example.trycloudflare.com`
-- Plan endpoint: `POST https://example.trycloudflare.com/api/v1/plan`
-- Shared bearer token: the value of `PLAN_API_TOKEN`
+- 基础 URL：`https://example.trycloudflare.com`
+- 规划接口：`POST https://example.trycloudflare.com/api/v1/plan`
+- 共享令牌：`PLAN_API_TOKEN` 的值
 
-## Server A Responsibilities
+## Server A 职责
 
-Server A should:
+Server A 需要：
 
-1. Forward user natural language to server B.
-2. Parse `tool_calls`.
-3. Execute database lookup and file retrieval.
-4. Push visualization payloads to the frontend through WebSocket.
-5. Generate or assemble the final user-facing answer.
+1. 将用户自然语言转发给 Server B。
+2. 解析 `tool_calls`。
+3. 执行数据库查询和文件检索。
+4. 通过 WebSocket 将可视化数据推送到前端。
+5. 生成或组装最终的用户回答。

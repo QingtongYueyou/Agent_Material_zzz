@@ -16,6 +16,15 @@ METRICS_DIR = BASE_DIR / "metrics"
 METRICS_RAW_DIR = METRICS_DIR / "raw"
 RENDER_METRICS_FILE = METRICS_RAW_DIR / "render_metrics.csv"
 INTERACTION_METRICS_FILE = METRICS_RAW_DIR / "interaction_metrics.csv"
+SPARK_ROOT = Path(os.getenv("SPARK_ROOT", str(BASE_DIR / "tools" / "vendor" / "spark")))
+SPARK_STATUS_FILE = SPLAT_DIR / ".spark_asset_pipeline_status.json"
+SPARK_AUTO_VARIANT = (os.getenv("SPARK_AUTO_VARIANT", "balanced") or "balanced").strip().lower()
+SPARK_AUTO_INGEST = (os.getenv("SPARK_AUTO_INGEST", "true") or "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 CIF_DIR.mkdir(parents=True, exist_ok=True)
 SPLAT_DIR.mkdir(parents=True, exist_ok=True)

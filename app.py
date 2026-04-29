@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from core.spark_asset_ingest import ensure_auto_ingest_started
 from core.workflow import WorkflowOrchestrator
 from ui.chat import render_chat_panel
 from ui.components import render_debug_sidebar, render_task_panel, render_top_bar
@@ -31,6 +32,7 @@ st.set_page_config(
 
 apply_styles()
 _init_session_state()
+ensure_auto_ingest_started()
 
 render_top_bar()
 
