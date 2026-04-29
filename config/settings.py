@@ -28,3 +28,4 @@ POE_API_BASE_URL = os.getenv("POE_API_BASE_URL", "https://api.poe.com/v1")
 
 LLM_MODEL_ID = os.getenv("LLM_MODEL_ID", "GPT-4o")
 LLM_TIMEOUT_SEC = int(os.getenv("LLM_TIMEOUT_SEC", "45"))
+PLAN_API_TOKEN = os.getenv("PLAN_API_TOKEN", "")

@@ -17,12 +17,23 @@ Primary launch command:
 streamlit run app.py
 ```
 
+The project also supports a server-B planner API for integration with an external server A:
+
+```bash
+uvicorn api.main:app --host 127.0.0.1 --port 8000
+```
+
+Planner docs: `docs/PLANNER_API.md`
+
 ## Main Runtime Path
 
 - `app.py` is the Streamlit entry point.
 - Current active workflow is `core/workflow.py` via `WorkflowOrchestrator`.
 - `core/steps.py` is an older/fallback fixed-step workflow and is not the main path used by `app.py`.
 - `material_chatbot.py` and `core/agent.py` keep the older Agno agent path.
+- `api/main.py` exposes the FastAPI planner service (`GET /health`, `POST /api/v1/plan`) for server A integration.
+- `core/planner.py` converts natural-language materials requests into strict JSON tool calls for server A.
+- `core/planner_schema.py` defines the server-A tool-call contract and validation/cleanup helpers.
 
 Current user flow:
 
@@ -38,12 +49,20 @@ Current user flow:
 8. `ui/visualization.py` renders the 3DGS/WebGL panel plus Altair charts.
 9. Final answer is generated from structured facts; if LLM generation fails, a template fallback is used.
 
+Server-B planner flow:
+
+1. Server A sends `POST /api/v1/plan` with a user query and optional context.
+2. `api/main.py` optionally checks `PLAN_API_TOKEN`.
+3. `core/planner.py` calls the LLM through `core/llm_client.py`.
+4. The planner returns strict JSON tool calls such as `material.get_structure_file` and `visualization.render_xrd`.
+5. Server A executes database lookup, file retrieval, WebSocket push, visualization, and final answering.
+
 ## Key Modules
 
 - `config/settings.py`
   - Loads `.env`.
   - Defines project paths, metrics paths, API keys, LLM model id, and timeout.
-  - Important env vars: `MP_API_KEY` or `MAPI_KEY`, `POE_API_KEY`, `POE_API_BASE_URL`, `LLM_MODEL_ID`, `LLM_TIMEOUT_SEC`.
+  - Important env vars: `MP_API_KEY` or `MAPI_KEY`, `POE_API_KEY`, `POE_API_BASE_URL`, `LLM_MODEL_ID`, `LLM_TIMEOUT_SEC`, `PLAN_API_TOKEN`.
   - Do not expose `.env` contents in summaries or commits.
 
 - `core/tools.py`
@@ -74,6 +93,19 @@ Current user flow:
 - `core/answer_generator.py`
   - Used mainly by the older fixed-step flow.
   - Contains intent classification, final answer generation, and answer/material-id consistency validation.
+
+- `core/planner.py`
+  - Server-B natural-language planner.
+  - Calls the LLM to produce strict JSON tool calls for server A.
+  - Falls back to a conservative rule-based plan if the LLM is unavailable or emits invalid JSON.
+
+- `core/planner_schema.py`
+  - Defines available server-A tools and their allowed argument keys.
+  - Cleans and validates LLM-emitted tool calls.
+
+- `api/main.py`
+  - FastAPI app exposing `GET /health` and `POST /api/v1/plan`.
+  - Uses `PLAN_API_TOKEN` as optional Bearer-token auth.
 
 - `ui/chat.py`
   - Left chat panel and input.
