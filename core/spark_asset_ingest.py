@@ -14,6 +14,9 @@ from config.settings import (
     SPARK_AUTO_INGEST,
     SPARK_AUTO_VARIANT,
     SPARK_ROOT,
+    SPLAT_DERIVED_DIR,
+    SPLAT_PIPELINE_DIR,
+    SPLAT_SOURCE_DIR,
     SPARK_STATUS_FILE,
     SPLAT_DIR,
 )
@@ -49,7 +52,13 @@ def _is_source_candidate(path: Path) -> bool:
 
 
 def _iter_source_candidates() -> list[Path]:
-    return sorted(path for path in SPLAT_DIR.iterdir() if _is_source_candidate(path))
+    candidates = set(path.resolve() for path in SPLAT_SOURCE_DIR.iterdir() if _is_source_candidate(path))
+    candidates.update(path.resolve() for path in SPLAT_DIR.iterdir() if _is_source_candidate(path))
+    return sorted(Path(path) for path in candidates)
+
+
+def _manifest_path_for_asset(asset_id: str) -> Path:
+    return SPLAT_DERIVED_DIR / asset_id / f"{asset_id}.manifest.json"
 
 
 def _resolve_manifest_variant_path(manifest_path: Path, variant_name: str) -> Path | None:
@@ -70,14 +79,29 @@ def _resolve_manifest_variant_path(manifest_path: Path, variant_name: str) -> Pa
         return None
 
     candidate = Path(raw_path)
-    resolved = candidate if candidate.is_absolute() else (manifest_path.parent / candidate).resolve()
-    if resolved.exists():
-        return resolved
+    if candidate.is_absolute():
+        return candidate if candidate.exists() else None
+
+    splat_dir = manifest_path.parent.parent.parent if manifest_path.parent.parent.parent.exists() else SPLAT_DIR
+    search_roots = [
+        manifest_path.parent,
+        SPLAT_SOURCE_DIR,
+        SPLAT_DERIVED_DIR,
+        splat_dir,
+    ]
+    seen: set[Path] = set()
+    for root in search_roots:
+        resolved = (root / candidate).resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.exists():
+            return resolved
     return None
 
 
 def _variant_is_current(source_path: Path, variant_name: str) -> bool:
-    manifest_path = SPLAT_DIR / f"{source_path.stem}.manifest.json"
+    manifest_path = _manifest_path_for_asset(source_path.stem)
     if not manifest_path.exists():
         return False
 
@@ -96,7 +120,7 @@ def _variant_is_current(source_path: Path, variant_name: str) -> bool:
 
 
 def _source_variant_matches(source_path: Path) -> bool:
-    manifest_path = SPLAT_DIR / f"{source_path.stem}.manifest.json"
+    manifest_path = _manifest_path_for_asset(source_path.stem)
     if not manifest_path.exists():
         return False
 

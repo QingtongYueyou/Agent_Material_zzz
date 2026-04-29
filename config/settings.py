@@ -12,12 +12,14 @@ load_dotenv(dotenv_path=BASE_DIR / ".env")
 CIF_DIR = BASE_DIR / "cif_files"
 STATIC_DIR = BASE_DIR / "static"
 SPLAT_DIR = STATIC_DIR / "splat_files"
+SPLAT_SOURCE_DIR = SPLAT_DIR / "source"
+SPLAT_DERIVED_DIR = SPLAT_DIR / "derived"
+SPLAT_PIPELINE_DIR = SPLAT_DIR / "_pipeline"
 METRICS_DIR = BASE_DIR / "metrics"
 METRICS_RAW_DIR = METRICS_DIR / "raw"
 RENDER_METRICS_FILE = METRICS_RAW_DIR / "render_metrics.csv"
 INTERACTION_METRICS_FILE = METRICS_RAW_DIR / "interaction_metrics.csv"
-SPARK_ROOT = Path(os.getenv("SPARK_ROOT", str(BASE_DIR / "tools" / "vendor" / "spark")))
-SPARK_STATUS_FILE = SPLAT_DIR / ".spark_asset_pipeline_status.json"
+SPARK_STATUS_FILE = SPLAT_PIPELINE_DIR / "spark_asset_pipeline_status.json"
 SPARK_AUTO_VARIANT = (os.getenv("SPARK_AUTO_VARIANT", "balanced") or "balanced").strip().lower()
 SPARK_AUTO_INGEST = (os.getenv("SPARK_AUTO_INGEST", "true") or "true").strip().lower() in {
     "1",
@@ -26,8 +28,32 @@ SPARK_AUTO_INGEST = (os.getenv("SPARK_AUTO_INGEST", "true") or "true").strip().l
     "on",
 }
 
+
+def _resolve_spark_root() -> Path:
+    configured = (os.getenv("SPARK_ROOT") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+
+    candidates = [
+        Path("D:/tools/spark"),
+        Path.home() / "tools" / "spark",
+        Path.home() / "spark",
+        BASE_DIR / "tools" / "vendor" / "spark",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return candidates[0]
+
+
+SPARK_ROOT = _resolve_spark_root()
+
 CIF_DIR.mkdir(parents=True, exist_ok=True)
 SPLAT_DIR.mkdir(parents=True, exist_ok=True)
+SPLAT_SOURCE_DIR.mkdir(parents=True, exist_ok=True)
+SPLAT_DERIVED_DIR.mkdir(parents=True, exist_ok=True)
+SPLAT_PIPELINE_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_RAW_DIR.mkdir(parents=True, exist_ok=True)
 

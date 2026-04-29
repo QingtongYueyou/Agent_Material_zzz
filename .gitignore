@@ -9,6 +9,11 @@ __pycache__/
 cif_files/*.cif
 metrics/raw/*.csv
 metrics/raw/*.ply
+metrics/raw/samples/*.ply
+!metrics/raw/README.md
+!metrics/raw/samples/README.md
+
+# Legacy flat splat asset layout
 static/splat_files/*.ply
 static/splat_files/*.spz
 static/splat_files/*.splat
@@ -17,6 +22,19 @@ static/splat_files/*.rad
 static/splat_files/*.radc
 static/splat_files/*.manifest.json
 static/splat_files/.spark_asset_pipeline_status.json
+
+# Layered splat asset layout
+static/splat_files/source/*.ply
+static/splat_files/source/*.spz
+static/splat_files/source/*.splat
+static/splat_files/source/*.ksplat
+static/splat_files/derived/**
+!static/splat_files/derived/
+!static/splat_files/derived/README.md
+static/splat_files/_pipeline/*.json
+!static/splat_files/_pipeline/README.md
+!static/splat_files/source/README.md
+!static/splat_files/README.md
 
 # Spark build toolchain (vendored source, large)
 tools/vendor/

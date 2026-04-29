@@ -12,8 +12,10 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_SPLAT_DIR = ROOT_DIR / "static" / "splat_files"
-DEFAULT_SPARK_ROOT = ROOT_DIR / "tools" / "vendor" / "spark"
-STATUS_FILE_NAME = ".spark_asset_pipeline_status.json"
+DEFAULT_SOURCE_DIR = DEFAULT_SPLAT_DIR / "source"
+DEFAULT_DERIVED_DIR = DEFAULT_SPLAT_DIR / "derived"
+DEFAULT_PIPELINE_DIR = DEFAULT_SPLAT_DIR / "_pipeline"
+STATUS_FILE_NAME = "spark_asset_pipeline_status.json"
 RAW_SOURCE_SUFFIXES = {".ply", ".spz", ".splat", ".ksplat"}
 BUILDABLE_SOURCE_SUFFIXES = {".ply", ".spz"}
 
@@ -22,6 +24,31 @@ VARIANT_PROFILES = {
     "balanced": {"method": "quality", "max_sh": 1, "chunked": True},
     "full": {"method": "quality", "max_sh": 3, "chunked": True},
 }
+
+
+def _default_spark_root_candidates() -> list[Path]:
+    return [
+        Path("D:/tools/spark"),
+        Path.home() / "tools" / "spark",
+        Path.home() / "spark",
+        ROOT_DIR / "tools" / "vendor" / "spark",
+    ]
+
+
+def _resolve_default_spark_root() -> Path:
+    configured = (os.getenv("SPARK_ROOT") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+
+    candidates = _default_spark_root_candidates()
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return candidates[0]
+
+
+DEFAULT_SPARK_ROOT = _resolve_default_spark_root()
 
 
 def _timestamp_utc() -> str:
@@ -95,6 +122,32 @@ def _relative_to_splat_dir(path: Path, splat_dir: Path) -> str:
     return path.resolve().relative_to(splat_dir.resolve()).as_posix()
 
 
+def _source_dir(splat_dir: Path) -> Path:
+    return splat_dir / "source"
+
+
+def _derived_dir(splat_dir: Path) -> Path:
+    return splat_dir / "derived"
+
+
+def _pipeline_dir(splat_dir: Path) -> Path:
+    return splat_dir / "_pipeline"
+
+
+def _ensure_layout_dirs(splat_dir: Path) -> None:
+    _source_dir(splat_dir).mkdir(parents=True, exist_ok=True)
+    _derived_dir(splat_dir).mkdir(parents=True, exist_ok=True)
+    _pipeline_dir(splat_dir).mkdir(parents=True, exist_ok=True)
+
+
+def _manifest_path_for_asset(asset_id: str, splat_dir: Path) -> Path:
+    return _derived_dir(splat_dir) / asset_id / f"{asset_id}.manifest.json"
+
+
+def _derived_asset_dir(asset_id: str, splat_dir: Path) -> Path:
+    return _manifest_path_for_asset(asset_id, splat_dir).parent
+
+
 def _load_manifest(manifest_path: Path, asset_id: str) -> dict:
     if manifest_path.exists():
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -114,6 +167,7 @@ def _load_manifest(manifest_path: Path, asset_id: str) -> dict:
 
 def _save_manifest(manifest_path: Path, manifest: dict) -> None:
     manifest["updated_at_utc"] = _timestamp_utc()
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -140,7 +194,7 @@ def _npm_executable() -> str:
 
 
 def _status_file_path(splat_dir: Path) -> Path:
-    return splat_dir / STATUS_FILE_NAME
+    return _pipeline_dir(splat_dir) / STATUS_FILE_NAME
 
 
 def _save_status_file(path: Path, payload: dict) -> None:
@@ -161,14 +215,48 @@ def _is_source_candidate(path: Path) -> bool:
 
 
 def _iter_source_candidates(splat_dir: Path) -> list[Path]:
-    return sorted(path for path in splat_dir.iterdir() if _is_source_candidate(path))
+    source_dir = _source_dir(splat_dir)
+    candidates = set(path.resolve() for path in source_dir.iterdir() if _is_source_candidate(path))
+    candidates.update(path.resolve() for path in splat_dir.iterdir() if _is_source_candidate(path))
+    return sorted(Path(path) for path in candidates)
+
+
+def _normalize_source_location(source_path: Path, splat_dir: Path) -> Path:
+    source_dir = _source_dir(splat_dir)
+    if source_path.parent.resolve() == source_dir.resolve():
+        return source_path
+
+    target_path = source_dir / source_path.name
+    if target_path.resolve() == source_path.resolve():
+        return target_path
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    if target_path.exists():
+        target_path.unlink()
+    source_path.replace(target_path)
+    return target_path
 
 
 def _resolve_manifest_entry_path(manifest_path: Path, raw_path: str) -> Path | None:
     candidate = Path(raw_path)
-    resolved = candidate if candidate.is_absolute() else (manifest_path.parent / candidate).resolve()
-    if resolved.exists():
-        return resolved
+    if candidate.is_absolute():
+        return candidate if candidate.exists() else None
+
+    splat_dir = manifest_path.parent.parent.parent if manifest_path.parent.parent.parent.exists() else DEFAULT_SPLAT_DIR
+    search_roots = [
+        manifest_path.parent,
+        _source_dir(splat_dir),
+        _derived_dir(splat_dir),
+        splat_dir,
+    ]
+    seen: set[Path] = set()
+    for root in search_roots:
+        resolved = (root / candidate).resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.exists():
+            return resolved
     return None
 
 
@@ -322,11 +410,17 @@ def _register_variant(
     _save_manifest(manifest_path, manifest)
 
 
-def _rename_chunked_outputs(source_prefix: str, target_prefix: str, directory: Path) -> list[Path]:
+def _rename_chunked_outputs(
+    source_prefix: str,
+    target_prefix: str,
+    source_dir: Path,
+    target_dir: Path,
+) -> list[Path]:
+    target_dir.mkdir(parents=True, exist_ok=True)
     moved_paths: list[Path] = []
-    for path in sorted(directory.glob(f"{source_prefix}*")):
+    for path in sorted(source_dir.glob(f"{source_prefix}*")):
         target_name = path.name.replace(source_prefix, target_prefix, 1)
-        target_path = directory / target_name
+        target_path = target_dir / target_name
         if target_path.exists():
             target_path.unlink()
         path.replace(target_path)
@@ -340,7 +434,8 @@ def _build_lod_variant(args: argparse.Namespace) -> None:
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     splat_dir = Path(args.splat_dir).resolve()
-    manifest_path = Path(args.manifest).resolve() if args.manifest else splat_dir / f"{args.asset_id}.manifest.json"
+    _ensure_layout_dirs(splat_dir)
+    manifest_path = Path(args.manifest).resolve() if args.manifest else _manifest_path_for_asset(args.asset_id, splat_dir)
     spark_root = Path(args.spark_root).resolve()
 
     _ensure_command(_npm_executable())
@@ -377,9 +472,14 @@ def _build_lod_variant(args: argparse.Namespace) -> None:
 
     source_prefix = f"{input_path.stem}-lod"
     target_prefix = f"{args.asset_id}-{args.variant}-lod"
-    moved_paths = _rename_chunked_outputs(source_prefix, target_prefix, input_path.parent)
+    moved_paths = _rename_chunked_outputs(
+        source_prefix,
+        target_prefix,
+        input_path.parent,
+        _derived_asset_dir(args.asset_id, splat_dir),
+    )
 
-    target_header = input_path.parent / f"{target_prefix}.rad"
+    target_header = _derived_asset_dir(args.asset_id, splat_dir) / f"{target_prefix}.rad"
     if target_header not in moved_paths or not target_header.exists():
         raise FileNotFoundError(
             f"Expected build output not found after rename: {target_header}"
@@ -436,7 +536,8 @@ def _register_existing_variant(args: argparse.Namespace) -> None:
         raise FileNotFoundError(f"Variant file not found: {asset_file}")
 
     splat_dir = Path(args.splat_dir).resolve()
-    manifest_path = Path(args.manifest).resolve() if args.manifest else splat_dir / f"{args.asset_id}.manifest.json"
+    _ensure_layout_dirs(splat_dir)
+    manifest_path = Path(args.manifest).resolve() if args.manifest else _manifest_path_for_asset(args.asset_id, splat_dir)
     source_path = Path(args.source).resolve() if args.source else None
     bundle_size_bytes = None
     if args.paged and asset_file.suffix.lower() == ".rad":
@@ -469,7 +570,8 @@ def _register_source_variant(args: argparse.Namespace) -> None:
         raise FileNotFoundError(f"Source file not found: {source_file}")
 
     splat_dir = Path(args.splat_dir).resolve()
-    manifest_path = Path(args.manifest).resolve() if args.manifest else splat_dir / f"{args.asset_id}.manifest.json"
+    _ensure_layout_dirs(splat_dir)
+    manifest_path = Path(args.manifest).resolve() if args.manifest else _manifest_path_for_asset(args.asset_id, splat_dir)
 
     _register_variant(
         manifest_path=manifest_path,
@@ -489,6 +591,7 @@ def _register_source_variant(args: argparse.Namespace) -> None:
 
 def _sync_splat_dir(args: argparse.Namespace) -> None:
     splat_dir = Path(args.splat_dir).resolve()
+    _ensure_layout_dirs(splat_dir)
     spark_root = Path(args.spark_root).resolve() if args.spark_root else None
     can_build = spark_root is not None and spark_root.exists()
     status_path = _status_file_path(splat_dir)
@@ -517,8 +620,9 @@ def _sync_splat_dir(args: argparse.Namespace) -> None:
 
     try:
         for source_path in source_files:
+            source_path = _normalize_source_location(source_path, splat_dir)
             asset_id = source_path.stem
-            manifest_path = splat_dir / f"{asset_id}.manifest.json"
+            manifest_path = _manifest_path_for_asset(asset_id, splat_dir)
             buildable = source_path.suffix.lower() in BUILDABLE_SOURCE_SUFFIXES
             needs_source_registration = (
                 not manifest_path.exists()

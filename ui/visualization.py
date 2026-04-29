@@ -12,7 +12,7 @@ import altair as alt
 import streamlit as st
 import streamlit.components.v1 as components
 
-from config.settings import BASE_DIR, SPLAT_DIR
+from config.settings import BASE_DIR, SPLAT_DERIVED_DIR, SPLAT_DIR, SPLAT_SOURCE_DIR
 from core.perf_metrics import (
     append_interaction_metric,
     append_render_metric,
@@ -97,6 +97,22 @@ def _safe_relative_to_base(path: Path) -> str | None:
         return None
 
 
+def _manifest_candidates(asset_id: str) -> list[Path]:
+    return [
+        SPLAT_DERIVED_DIR / asset_id / f"{asset_id}.manifest.json",
+        SPLAT_DIR / f"{asset_id}.manifest.json",
+    ]
+
+
+def _direct_asset_roots() -> list[Path]:
+    roots = [SPLAT_SOURCE_DIR, SPLAT_DERIVED_DIR, SPLAT_DIR]
+    deduped: list[Path] = []
+    for root in roots:
+        if root not in deduped:
+            deduped.append(root)
+    return deduped
+
+
 def _resolve_asset_path(raw_path: str, manifest_path: Path | None = None) -> Path | None:
     candidate = Path(raw_path)
     search_roots = []
@@ -106,6 +122,8 @@ def _resolve_asset_path(raw_path: str, manifest_path: Path | None = None) -> Pat
     else:
         if manifest_path is not None:
             search_roots.append((manifest_path.parent / candidate).resolve())
+        search_roots.append((SPLAT_SOURCE_DIR / candidate).resolve())
+        search_roots.append((SPLAT_DERIVED_DIR / candidate).resolve())
         search_roots.append((SPLAT_DIR / candidate).resolve())
         search_roots.append((BASE_DIR / candidate).resolve())
 
@@ -245,8 +263,10 @@ def _resolve_direct_asset(filename: str) -> dict[str, Any] | None:
     suffixes = [".rad", ".ply", ".spz", ".splat", ".ksplat"]
 
     for key in keys:
-        exact_candidates = [SPLAT_DIR / f"{key}-lod.rad"]
-        exact_candidates.extend(SPLAT_DIR / f"{key}{suffix}" for suffix in suffixes)
+        exact_candidates: list[Path] = []
+        for root in _direct_asset_roots():
+            exact_candidates.append(root / f"{key}-lod.rad")
+            exact_candidates.extend(root / f"{key}{suffix}" for suffix in suffixes)
 
         for candidate in exact_candidates:
             if not candidate.exists():
@@ -266,32 +286,33 @@ def _resolve_direct_asset(filename: str) -> dict[str, Any] | None:
                 selection_note=note,
             )
 
-        for pattern in (f"*{key}*-lod.rad", f"*{key}*.rad", f"*{key}*.ply"):
-            matches = sorted(SPLAT_DIR.glob(pattern))
-            if not matches:
-                continue
+        for root in _direct_asset_roots():
+            for pattern in (f"*{key}*-lod.rad", f"*{key}*.rad", f"*{key}*.ply"):
+                matches = sorted(root.rglob(pattern))
+                if not matches:
+                    continue
 
-            return _build_asset_record(
-                matches[0],
-                asset_id=Path(filename).stem,
-                variant_name="direct",
-                source_kind="direct",
-                manifest_name=None,
-                selection_note=f"No manifest found; using glob match '{matches[0].name}'",
-            )
+                return _build_asset_record(
+                    matches[0],
+                    asset_id=Path(filename).stem,
+                    variant_name="direct",
+                    source_kind="direct",
+                    manifest_name=None,
+                    selection_note=f"No manifest found; using glob match '{matches[0].name}'",
+                )
 
     return None
 
 
 def _resolve_splat_asset(filename: str, quality_preference: str) -> dict[str, Any] | None:
     for key in _candidate_asset_keys(filename):
-        manifest_path = SPLAT_DIR / f"{key}.manifest.json"
-        if not manifest_path.exists():
-            continue
+        for manifest_path in _manifest_candidates(key):
+            if not manifest_path.exists():
+                continue
 
-        asset_record = _select_manifest_asset(manifest_path, quality_preference)
-        if asset_record is not None:
-            return asset_record
+            asset_record = _select_manifest_asset(manifest_path, quality_preference)
+            if asset_record is not None:
+                return asset_record
 
     return _resolve_direct_asset(filename)
 
@@ -331,6 +352,10 @@ def _render_asset_pipeline_status() -> None:
         st.caption(f"3D 资产自动管线已就绪，最近一次后台构建完成 {built_count} 个 `{variant}` 资产。")
 
 
+_TEMPLATE_PATH = Path(__file__).resolve().parent / "spark_viewer_template.html"
+_LEGACY_SPLAT_DIRS = [SPLAT_SOURCE_DIR, SPLAT_DERIVED_DIR, SPLAT_DIR]
+
+
 def _build_spark_viewer_html(
     *,
     asset_id: str,
@@ -348,570 +373,67 @@ def _build_spark_viewer_html(
     metrics_url: str,
     interaction_metrics_url: str,
 ) -> str:
-    vertex_count_json = json.dumps(vertex_count)
-    large_model_json = json.dumps(is_large_model)
-    enable_lod_json = json.dumps(enable_lod)
-    enable_paged_json = json.dumps(enable_paged)
-    variant_name_json = json.dumps(variant_name)
-    lod_mode_label_json = json.dumps(lod_mode_label)
-
-    return f"""
-                <!DOCTYPE html>
-                <html lang="en">
-                <head>
-                    <meta charset="utf-8">
-                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                    <style>
-                        :root {{
-                            color-scheme: light;
-                            font-family: "Segoe UI", Arial, sans-serif;
-                        }}
-
-                        * {{
-                            box-sizing: border-box;
-                        }}
-
-                        body {{
-                            margin: 0;
-                            overflow: hidden;
-                            background:
-                                radial-gradient(circle at top left, rgba(148, 163, 184, 0.18), transparent 34%),
-                                linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
-                            font-family: "Segoe UI", Arial, sans-serif;
-                        }}
-
-                        #container {{
-                            width: 100%;
-                            height: 350px;
-                            position: relative;
-                            border-radius: 16px;
-                            overflow: hidden;
-                        }}
-
-                        #fps-display {{
-                            position: absolute;
-                            top: 10px;
-                            right: 10px;
-                            background: rgba(0, 0, 0, 0.6);
-                            color: #4ade80;
-                            padding: 4px 8px;
-                            border-radius: 6px;
-                            font-size: 12px;
-                            font-weight: 700;
-                            pointer-events: none;
-                            z-index: 100;
-                            backdrop-filter: blur(2px);
-                            border: 1px solid rgba(255,255,255,0.1);
-                            font-family: monospace;
-                        }}
-
-                        #perf-panel {{
-                            position: absolute;
-                            left: 10px;
-                            top: 10px;
-                            z-index: 101;
-                            display: flex;
-                            flex-direction: column;
-                            gap: 8px;
-                            max-width: 280px;
-                        }}
-
-                        #perf-button {{
-                            border: none;
-                            border-radius: 6px;
-                            background: rgba(15, 23, 42, 0.86);
-                            color: white;
-                            padding: 8px 10px;
-                            font-size: 12px;
-                            cursor: pointer;
-                        }}
-
-                        #perf-button:hover {{
-                            background: rgba(30, 41, 59, 0.92);
-                        }}
-
-                        #perf-summary {{
-                            background: rgba(255, 255, 255, 0.92);
-                            color: #0f172a;
-                            border-radius: 8px;
-                            padding: 8px 10px;
-                            font-size: 12px;
-                            line-height: 1.45;
-                            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15);
-                        }}
-
-                        #perf-toggle {{
-                            border: none;
-                            border-radius: 6px;
-                            background: rgba(255, 255, 255, 0.92);
-                            color: #0f172a;
-                            padding: 8px 10px;
-                            font-size: 12px;
-                            cursor: pointer;
-                            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15);
-                            text-align: left;
-                        }}
-
-                        #perf-tools {{
-                            display: none;
-                            flex-direction: column;
-                            gap: 8px;
-                        }}
-
-                        #perf-tools.visible {{
-                            display: flex;
-                        }}
-                    </style>
-                    <script type="importmap">
-                    {{
-                        "imports": {{
-                            "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.180.0/three.module.js",
-                            "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.0.0/spark.module.js"
-                        }}
-                    }}
-                    </script>
-                </head>
-                <body>
-                    <div id="container"></div>
-                    <div id="perf-panel">
-                        <button id="perf-toggle" type="button">Show metrics panel</button>
-                        <div id="perf-tools">
-                            <button id="perf-button" type="button">Retest render</button>
-                            <div id="perf-summary">
-                                Engine: Spark 2.0<br/>
-                                Asset: {asset_id}<br/>
-                                Model: {model_name}<br/>
-                                Variant: {variant_name or "default"}<br/>
-                                Vertices: {vertex_count_label}<br/>
-                                Drag to rotate, wheel to move.
-                            </div>
-                        </div>
-                    </div>
-
-                    <div id="loading" style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); background:rgba(0,0,0,0.7); color:white; padding:10px 20px; border-radius:8px; font-size:14px; display:flex; align-items:center; gap:10px;">
-                        <div style="width:16px; height:16px; border:2px solid white; border-top-color:transparent; border-radius:50%; animation:spin 1s linear infinite;"></div>
-                        <div id="progress-text">Loading...</div>
-                    </div>
-
-                    <div id="fps-display">FPS: --</div>
-
-                    <style>@keyframes spin {{ to {{ transform: rotate(360deg); }} }}</style>
-
-                    <script type="module">
-                        import * as THREE from 'three';
-                        import {{ SparkControls, SparkRenderer, SplatMesh }} from '@sparkjsdev/spark';
-
-                        const container = document.getElementById('container');
-                        const loadingLabel = document.getElementById('loading');
-                        const fpsDiv = document.getElementById('fps-display');
-                        const progressText = document.getElementById('progress-text');
-                        const perfToggle = document.getElementById('perf-toggle');
-                        const perfTools = document.getElementById('perf-tools');
-                        const perfButton = document.getElementById('perf-button');
-                        const perfSummary = document.getElementById('perf-summary');
-                        const assetId = {json.dumps(asset_id)};
-                        const isLargeModel = {large_model_json};
-                        const enableLod = {enable_lod_json};
-                        const enablePaged = {enable_paged_json};
-                        const variantName = {variant_name_json};
-                        const lodSummary = {lod_mode_label_json};
-
-                        let runCounter = 0;
-                        let interactionEnabled = false;
-                        let pendingInteraction = null;
-                        let currentViewer = null;
-                        let frameCount = 0;
-                        let lastFpsTs = performance.now();
-
-                        function updateSummary(lines) {{
-                            perfSummary.innerHTML = lines.join('<br/>');
-                        }}
-
-                        function postMetrics(record) {{
-                            fetch("{metrics_url}", {{
-                                method: "POST",
-                                headers: {{
-                                    "Content-Type": "application/json"
-                                }},
-                                body: JSON.stringify(record),
-                                keepalive: true
-                            }}).catch((err) => console.error("Metrics upload error:", err));
-                        }}
-
-                        function postInteractionMetrics(record) {{
-                            fetch("{interaction_metrics_url}", {{
-                                method: "POST",
-                                headers: {{
-                                    "Content-Type": "application/json"
-                                }},
-                                body: JSON.stringify(record),
-                                keepalive: true
-                            }}).catch((err) => console.error("Interaction metrics upload error:", err));
-                        }}
-
-                        function cameraSnapshot(camera) {{
-                            if (!camera) {{
-                                return null;
-                            }}
-
-                            return {{
-                                position: [camera.position.x, camera.position.y, camera.position.z],
-                                quaternion: [camera.quaternion.x, camera.quaternion.y, camera.quaternion.z, camera.quaternion.w]
-                            }};
-                        }}
-
-                        function hasCameraChanged(before, after) {{
-                            if (!before || !after) {{
-                                return false;
-                            }}
-
-                            const valuesBefore = before.position.concat(before.quaternion);
-                            const valuesAfter = after.position.concat(after.quaternion);
-
-                            for (let i = 0; i < valuesBefore.length; i += 1) {{
-                                if (Math.abs(valuesBefore[i] - valuesAfter[i]) > 1e-4) {{
-                                    return true;
-                                }}
-                            }}
-
-                            return false;
-                        }}
-
-                        function armInteractionMeasurement(camera, interactionType, eventType) {{
-                            if (!interactionEnabled) {{
-                                return;
-                            }}
-
-                            pendingInteraction = {{
-                                interactionType,
-                                eventType,
-                                startTs: performance.now(),
-                                baseline: cameraSnapshot(camera),
-                                recorded: false
-                            }};
-
-                            updateSummary([
-                                'Engine: Spark 2.0',
-                                `Asset: ${{assetId}}`,
-                                `Model: {model_name}`,
-                                `Variant: ${{variantName || 'default'}}`,
-                                `Mode: ${{lodSummary}}`,
-                                `Interaction: ${{interactionType}}`,
-                                'Status: waiting for camera movement...'
-                            ]);
-                        }}
-
-                        function maybeRecordInteraction(camera) {{
-                            if (!pendingInteraction || pendingInteraction.recorded) {{
-                                return;
-                            }}
-
-                            const current = cameraSnapshot(camera);
-                            if (!hasCameraChanged(pendingInteraction.baseline, current)) {{
-                                return;
-                            }}
-
-                            const latencyMs = Number((performance.now() - pendingInteraction.startTs).toFixed(3));
-                            pendingInteraction.recorded = true;
-
-                            const metric = {{
-                                event_type: pendingInteraction.eventType,
-                                model_name: "{model_name}",
-                                model_format: "{model_format}",
-                                vertex_count: {vertex_count_json},
-                                file_size_bytes: {file_size_bytes},
-                                interaction_type: pendingInteraction.interactionType,
-                                input_to_camera_change_ms: latencyMs,
-                                viewport_width: window.innerWidth,
-                                viewport_height: window.innerHeight,
-                                user_agent: navigator.userAgent
-                            }};
-
-                            postInteractionMetrics(metric);
-                            updateSummary([
-                                'Engine: Spark 2.0',
-                                `Asset: ${{assetId}}`,
-                                `Model: {model_name}`,
-                                `Variant: ${{variantName || 'default'}}`,
-                                `Mode: ${{lodSummary}}`,
-                                `Interaction: ${{pendingInteraction.interactionType}}`,
-                                `input->camera change: ${{latencyMs}} ms`
-                            ]);
-                        }}
-
-                        function disposeCurrentViewer() {{
-                            if (!currentViewer) {{
-                                return;
-                            }}
-
-                            window.removeEventListener('resize', currentViewer.onResize);
-                            currentViewer.renderer.setAnimationLoop(null);
-                            if (currentViewer.mesh) {{
-                                currentViewer.scene.remove(currentViewer.mesh);
-                                currentViewer.mesh.dispose?.();
-                            }}
-                            currentViewer.scene.remove(currentViewer.spark);
-                            currentViewer.spark.dispose?.();
-                            currentViewer.renderer.dispose?.();
-                            currentViewer = null;
-                            container.innerHTML = '';
-                        }}
-
-                        function updateFPS() {{
-                            const now = performance.now();
-                            frameCount += 1;
-
-                            if (now - lastFpsTs < 500) {{
-                                return;
-                            }}
-
-                            const fps = Math.round((frameCount * 1000) / (now - lastFpsTs));
-                            fpsDiv.innerText = `FPS: ${{fps}}`;
-
-                            if (fps >= 40) fpsDiv.style.color = '#4ade80';
-                            else if (fps >= 20) fpsDiv.style.color = '#facc15';
-                            else fpsDiv.style.color = '#f87171';
-
-                            frameCount = 0;
-                            lastFpsTs = now;
-                        }}
-
-                        function fitCameraToMesh(mesh, camera) {{
-                            const bounds = mesh.getBoundingBox(false);
-                            const sphere = new THREE.Sphere();
-                            bounds.getBoundingSphere(sphere);
-
-                            const radius = Math.max(sphere.radius, 0.75);
-                            const distance = Math.max(radius * 2.8, 3.0);
-                            camera.position.set(
-                                sphere.center.x + distance * 0.7,
-                                sphere.center.y + distance * 0.35,
-                                sphere.center.z + distance
-                            );
-                            camera.near = Math.max(distance / 200, 0.01);
-                            camera.far = Math.max(distance * 20, 100);
-                            camera.lookAt(sphere.center);
-                            camera.updateProjectionMatrix();
-                        }}
-
-                        function createViewer() {{
-                            container.innerHTML = '';
-
-                            const scene = new THREE.Scene();
-                            const camera = new THREE.PerspectiveCamera(60, 1, 0.01, 1000);
-                            const renderer = new THREE.WebGLRenderer({{
-                                antialias: false,
-                                alpha: true,
-                                powerPreference: 'high-performance'
-                            }});
-                            const spark = new SparkRenderer({{
-                                renderer,
-                                sortRadial: true,
-                                maxStdDev: isLargeModel ? Math.sqrt(5) : Math.sqrt(8),
-                                lodSplatScale: isLargeModel ? 0.5 : 1.0,
-                                behindFoveate: isLargeModel ? 0.12 : 0.2,
-                                coneFov0: isLargeModel ? 80 : 90,
-                                coneFov: isLargeModel ? 110 : 120,
-                                coneFoveate: isLargeModel ? 0.3 : 0.4,
-                                minSortIntervalMs: isLargeModel ? 16 : 0
-                            }});
-                            const controls = new SparkControls({{
-                                canvas: renderer.domElement
-                            }});
-
-                            renderer.setPixelRatio(
-                                isLargeModel
-                                    ? 1
-                                    : Math.min(window.devicePixelRatio || 1, 1.5)
-                            );
-                            renderer.domElement.style.width = '100%';
-                            renderer.domElement.style.height = '100%';
-                            renderer.domElement.style.display = 'block';
-                            renderer.domElement.style.touchAction = 'none';
-                            renderer.domElement.tabIndex = 0;
-                            renderer.domElement.setAttribute('aria-label', 'Spark Gaussian Splat viewer');
-
-                            if ('outputColorSpace' in renderer && 'SRGBColorSpace' in THREE) {{
-                                renderer.outputColorSpace = THREE.SRGBColorSpace;
-                            }}
-
-                            scene.add(spark);
-                            container.appendChild(renderer.domElement);
-
-                            const onResize = () => {{
-                                const width = container.clientWidth || 640;
-                                const height = container.clientHeight || 350;
-                                camera.aspect = width / height;
-                                camera.updateProjectionMatrix();
-                                renderer.setSize(width, height, false);
-                            }};
-
-                            const viewerState = {{
-                                scene,
-                                camera,
-                                renderer,
-                                spark,
-                                controls,
-                                onResize,
-                                mesh: null,
-                                sceneReadyTs: null,
-                                firstFrameRecorded: false,
-                                eventType: '',
-                                clickTs: 0,
-                                requestStartTs: 0,
-                                runId: 0
-                            }};
-
-                            window.addEventListener('resize', onResize);
-                            onResize();
-
-                            camera.position.set(2.5, 1.5, 5.5);
-                            camera.lookAt(0, 0, 0);
-
-                            renderer.domElement.addEventListener('pointerdown', () => {{
-                                renderer.domElement.focus();
-                            }});
-
-                            renderer.setAnimationLoop(() => {{
-                                controls.update(camera);
-                                renderer.render(scene, camera);
-                                updateFPS();
-
-                                if (viewerState.sceneReadyTs !== null && !viewerState.firstFrameRecorded) {{
-                                    const firstFrameTs = performance.now();
-                                    const metric = {{
-                                        event_type: viewerState.eventType,
-                                        model_name: "{model_name}",
-                                        model_format: "{model_format}",
-                                        vertex_count: {vertex_count_json},
-                                        file_size_bytes: {file_size_bytes},
-                                        click_to_request_start_ms: Number((viewerState.requestStartTs - viewerState.clickTs).toFixed(3)),
-                                        request_start_to_scene_ready_ms: Number((viewerState.sceneReadyTs - viewerState.requestStartTs).toFixed(3)),
-                                        scene_ready_to_first_frame_ms: Number((firstFrameTs - viewerState.sceneReadyTs).toFixed(3)),
-                                        click_to_first_frame_ms: Number((firstFrameTs - viewerState.clickTs).toFixed(3)),
-                                        viewport_width: window.innerWidth,
-                                        viewport_height: window.innerHeight,
-                                        user_agent: navigator.userAgent
-                                    }};
-
-                                    viewerState.firstFrameRecorded = true;
-                                    loadingLabel.style.display = 'none';
-                                    perfButton.disabled = false;
-                                    postMetrics(metric);
-                                    updateSummary([
-                                        'Engine: Spark 2.0',
-                                        `Asset: ${{assetId}}`,
-                                        `Model: {model_name}`,
-                                        `Variant: ${{variantName || 'default'}}`,
-                                        `Mode: ${{lodSummary}}`,
-                                        `Event: ${{viewerState.eventType}} #${{viewerState.runId}}`,
-                                        `click->first frame: ${{metric.click_to_first_frame_ms}} ms`,
-                                        `request->ready: ${{metric.request_start_to_scene_ready_ms}} ms`,
-                                        `ready->frame: ${{metric.scene_ready_to_first_frame_ms}} ms`
-                                    ]);
-                                }}
-
-                                maybeRecordInteraction(camera);
-                            }});
-
-                            return viewerState;
-                        }}
-
-                        function loadScene(eventType) {{
-                            const clickTs = performance.now();
-                            const requestStartTs = performance.now();
-                            runCounter += 1;
-                            const runId = runCounter;
-
-                            disposeCurrentViewer();
-                            currentViewer = createViewer();
-                            currentViewer.eventType = eventType;
-                            currentViewer.clickTs = clickTs;
-                            currentViewer.requestStartTs = requestStartTs;
-                            currentViewer.runId = runId;
-                            pendingInteraction = null;
-
-                            loadingLabel.style.display = 'flex';
-                            loadingLabel.style.background = 'rgba(0,0,0,0.7)';
-                            progressText.innerText = 'Loading...';
-                            perfButton.disabled = true;
-
-                            updateSummary([
-                                'Engine: Spark 2.0',
-                                `Asset: ${{assetId}}`,
-                                `Model: {model_name}`,
-                                `Variant: ${{variantName || 'default'}}`,
-                                `Mode: ${{lodSummary}}`,
-                                'Status: loading viewer...'
-                            ]);
-
-                            const mesh = new SplatMesh({{
-                                url: "{model_url}",
-                                lod: enableLod,
-                                enableLod: enableLod ? true : undefined,
-                                lodScale: isLargeModel ? 0.5 : 1.0,
-                                paged: enablePaged,
-                                onProgress: (event) => {{
-                                    if (event.lengthComputable && event.total > 0) {{
-                                        const percent = ((event.loaded / event.total) * 100).toFixed(1);
-                                        progressText.innerText = `Loading ${{percent}}%`;
-                                    }} else if (typeof event.loaded === 'number') {{
-                                        progressText.innerText = `Loading ${{Math.round(event.loaded / 1024)}} KB`;
-                                    }} else {{
-                                        progressText.innerText = 'Loading...';
-                                    }}
-                                }}
-                            }});
-                            mesh.quaternion.set(1, 0, 0, 0);
-                            currentViewer.mesh = mesh;
-                            currentViewer.scene.add(mesh);
-
-                            mesh.initialized.then((loadedMesh) => {{
-                                if (currentViewer?.mesh !== loadedMesh) {{
-                                    return;
-                                }}
-
-                                fitCameraToMesh(loadedMesh, currentViewer.camera);
-                                currentViewer.sceneReadyTs = performance.now();
-                                progressText.innerText = 'Preparing first frame...';
-                            }}).catch((err) => {{
-                                console.error("Splat load error:", err);
-                                loadingLabel.style.display = 'flex';
-                                loadingLabel.style.background = "rgba(220, 38, 38, 0.9)";
-                                progressText.innerText = "Error: Check Console";
-                                updateSummary([
-                                    'Engine: Spark 2.0',
-                                    `Asset: ${{assetId}}`,
-                                    `Model: {model_name}`,
-                                    `Variant: ${{variantName || 'default'}}`,
-                                    `Mode: ${{lodSummary}}`,
-                                    'Status: load failed, check browser console'
-                                ]);
-                                perfButton.disabled = false;
-                            }});
-                        }}
-
-                        perfToggle.addEventListener('click', () => {{
-                            interactionEnabled = !interactionEnabled;
-                            perfTools.classList.toggle('visible', interactionEnabled);
-                            perfToggle.innerText = interactionEnabled ? 'Hide metrics panel' : 'Show metrics panel';
-                        }});
-                        perfButton.addEventListener('click', () => loadScene('manual_retest'));
-                        container.addEventListener('pointerdown', () => {{
-                            if (currentViewer) {{
-                                armInteractionMeasurement(currentViewer.camera, 'rotate_or_pan', 'pointerdown');
-                            }}
-                        }});
-                        container.addEventListener('wheel', () => {{
-                            if (currentViewer) {{
-                                armInteractionMeasurement(currentViewer.camera, 'zoom', 'wheel');
-                            }}
-                        }}, {{ passive: true }});
-                        loadScene('auto_initial');
-                    </script>
-                </body>
-                </html>
-                """
+    if not _TEMPLATE_PATH.exists():
+        return """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <style>
+                body {
+                    margin: 0;
+                    font-family: "Segoe UI", Arial, sans-serif;
+                    background: #f8fafc;
+                }
+                .spark-template-error {
+                    height: 350px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 24px;
+                    color: #991b1b;
+                    background: #fef2f2;
+                    border: 1px solid #fecaca;
+                    border-radius: 16px;
+                    text-align: center;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="spark-template-error">
+                Missing Spark viewer template: ui/spark_viewer_template.html
+            </div>
+        </body>
+        </html>
+        """
+
+    template = _TEMPLATE_PATH.read_text(encoding="utf-8")
+    variant_name_or_default = variant_name if variant_name else "default"
+
+    replacements = [
+        ("__ASSET_ID_JSON__", json.dumps(asset_id)),
+        ("__ASSET_ID__", asset_id),
+        ("__MODEL_URL__", model_url),
+        ("__MODEL_NAME__", model_name),
+        ("__MODEL_FORMAT__", model_format),
+        ("__VARIANT_NAME_OR_DEFAULT__", variant_name_or_default),
+        ("__VARIANT_NAME_JSON__", json.dumps(variant_name)),
+        ("__VERTEX_COUNT_LABEL__", vertex_count_label),
+        ("__VERTEX_COUNT_JSON__", json.dumps(vertex_count)),
+        ("__FILE_SIZE_BYTES__", str(file_size_bytes)),
+        ("__LARGE_MODEL_JSON__", json.dumps(is_large_model)),
+        ("__ENABLE_LOD_JSON__", json.dumps(enable_lod)),
+        ("__ENABLE_PAGED_JSON__", json.dumps(enable_paged)),
+        ("__LOD_MODE_LABEL_JSON__", json.dumps(lod_mode_label)),
+        ("__METRICS_URL__", metrics_url),
+        ("__INTERACTION_METRICS_URL__", interaction_metrics_url),
+    ]
+
+    html = template
+    for placeholder, value in replacements:
+        html = html.replace(placeholder, value)
+
+    return html
 
 
 def render_visualization_panel() -> None:
@@ -989,32 +511,36 @@ def render_visualization_panel() -> None:
     material_name = parts[0]
     formula_name = parts[1] if len(parts) > 1 else ""
 
-    search_candidates = [
-        os.path.join(SPLAT_DIR, f"{cif_basename}-lod.rad"),
-        os.path.join(SPLAT_DIR, f"{cif_basename}.rad"),
-        os.path.join(SPLAT_DIR, f"{cif_basename}.ply"),
-        os.path.join(SPLAT_DIR, f"{cif_basename}.spz"),
-        os.path.join(SPLAT_DIR, f"{cif_basename}.splat"),
-        os.path.join(SPLAT_DIR, f"{material_name}-lod.rad"),
-        os.path.join(SPLAT_DIR, f"{material_name}.rad"),
-        os.path.join(SPLAT_DIR, f"{material_name}.ply"),
-        os.path.join(SPLAT_DIR, f"{material_name}.spz"),
-        os.path.join(SPLAT_DIR, f"{material_name}.splat"),
-        os.path.join(SPLAT_DIR, f"{formula_name}-lod.rad") if formula_name else "",
-        os.path.join(SPLAT_DIR, f"{formula_name}.rad") if formula_name else "",
-        os.path.join(SPLAT_DIR, f"{formula_name}.ply") if formula_name else "",
-        os.path.join(SPLAT_DIR, f"{formula_name}.spz") if formula_name else "",
-        os.path.join(SPLAT_DIR, f"{formula_name}.splat") if formula_name else "",
-        f"GLOB:{os.path.join(SPLAT_DIR, f'*{formula_name}*-lod.rad')}" if formula_name else "",
-        f"GLOB:{os.path.join(SPLAT_DIR, f'*{formula_name}*.rad')}" if formula_name else "",
-        f"GLOB:{os.path.join(SPLAT_DIR, f'*{formula_name}*.ply')}" if formula_name else "",
-        f"GLOB:{os.path.join(SPLAT_DIR, f'*{material_name}*-lod.rad')}",
-        f"GLOB:{os.path.join(SPLAT_DIR, f'*{material_name}*.rad')}",
-        f"GLOB:{os.path.join(SPLAT_DIR, f'*{material_name}*.ply')}",
-        os.path.join(SPLAT_DIR, "object-lod.rad"),
-        os.path.join(SPLAT_DIR, "object.rad"),
-        os.path.join(SPLAT_DIR, "object.ply"),
-    ]
+    search_candidates: list[str] = []
+    for root in _LEGACY_SPLAT_DIRS:
+        search_candidates.extend(
+            [
+                os.path.join(root, f"{cif_basename}-lod.rad"),
+                os.path.join(root, f"{cif_basename}.rad"),
+                os.path.join(root, f"{cif_basename}.ply"),
+                os.path.join(root, f"{cif_basename}.spz"),
+                os.path.join(root, f"{cif_basename}.splat"),
+                os.path.join(root, f"{material_name}-lod.rad"),
+                os.path.join(root, f"{material_name}.rad"),
+                os.path.join(root, f"{material_name}.ply"),
+                os.path.join(root, f"{material_name}.spz"),
+                os.path.join(root, f"{material_name}.splat"),
+                os.path.join(root, f"{formula_name}-lod.rad") if formula_name else "",
+                os.path.join(root, f"{formula_name}.rad") if formula_name else "",
+                os.path.join(root, f"{formula_name}.ply") if formula_name else "",
+                os.path.join(root, f"{formula_name}.spz") if formula_name else "",
+                os.path.join(root, f"{formula_name}.splat") if formula_name else "",
+                f"GLOB:{os.path.join(root, f'*{formula_name}*-lod.rad')}" if formula_name else "",
+                f"GLOB:{os.path.join(root, f'*{formula_name}*.rad')}" if formula_name else "",
+                f"GLOB:{os.path.join(root, f'*{formula_name}*.ply')}" if formula_name else "",
+                f"GLOB:{os.path.join(root, f'*{material_name}*-lod.rad')}",
+                f"GLOB:{os.path.join(root, f'*{material_name}*.rad')}",
+                f"GLOB:{os.path.join(root, f'*{material_name}*.ply')}",
+                os.path.join(root, "object-lod.rad"),
+                os.path.join(root, "object.rad"),
+                os.path.join(root, "object.ply"),
+            ]
+        )
 
     found_splat_path = None if asset_info is None else str(asset_info["path"])
 
