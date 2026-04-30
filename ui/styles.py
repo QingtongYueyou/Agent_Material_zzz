@@ -158,6 +158,99 @@ def apply_styles() -> None:
             opacity: 1;
         }
 
+        /* === 3D viewer toolbar === */
+        .viewer-toolbar-title,
+        .chart-toolbar-title {
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+            padding: 0.55rem 0.8rem;
+            margin-bottom: 0.55rem;
+            background: #ffffff;
+            border: 1px solid #dbe5f3;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+            color: #172033;
+            font-size: 0.92rem;
+            font-weight: 700;
+        }
+
+        .viewer-toolbar-index,
+        .chart-toolbar-index {
+            width: 26px;
+            height: 26px;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #2563eb 0%, #14b8a6 100%);
+            color: #ffffff;
+            font-size: 0.78rem;
+            font-weight: 800;
+            box-shadow: 0 6px 14px rgba(37, 99, 235, 0.22);
+            flex: 0 0 auto;
+        }
+
+        .chart-toolbar-title {
+            margin-bottom: 0;
+        }
+
+        .viewer-toolbar-label {
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            color: #475569;
+            font-size: 0.78rem;
+            font-weight: 700;
+            white-space: nowrap;
+            padding-top: 0.05rem;
+        }
+
+        .quality-chip {
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.45rem;
+            padding: 0 0.75rem;
+            margin-bottom: 0.55rem;
+            background: rgba(255, 255, 255, 0.82);
+            border: 1px solid #cbd8ea;
+            border-radius: 14px;
+            color: #172033;
+            font-size: 0.92rem;
+            font-weight: 800;
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+            white-space: nowrap;
+        }
+
+        .quality-chip-icon {
+            width: 22px;
+            height: 22px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #0b7cff;
+            border: 2px solid #0b7cff;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            line-height: 1;
+        }
+
+        div[data-testid="stSelectbox"] [data-baseweb="select"] > div {
+            min-height: 44px !important;
+            border-radius: 14px !important;
+            background: rgba(255, 255, 255, 0.9) !important;
+            border: 2px solid #0b7cff !important;
+            box-shadow: 0 10px 24px rgba(11, 124, 255, 0.08) !important;
+        }
+
+        div[data-testid="stSelectbox"] {
+            margin-bottom: 0.55rem;
+        }
+
         /* === Finding 区域 === */
         .finding-box {
             background: #fffbeb;
@@ -482,6 +575,17 @@ def apply_styles() -> None:
         .stSelectbox select:focus {
             border-color: #667eea !important;
             box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1) !important;
+        }
+
+        .stSelectbox [data-baseweb="select"] input {
+            caret-color: transparent !important;
+            color: transparent !important;
+            cursor: default !important;
+            pointer-events: none !important;
+        }
+
+        .stSelectbox [data-baseweb="select"] input::selection {
+            background: transparent !important;
         }
 
         .stRadio > div {

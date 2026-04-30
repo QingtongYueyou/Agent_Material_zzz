@@ -157,11 +157,13 @@
         const enablePaged = __ENABLE_PAGED_JSON__;
         const variantName = __VARIANT_NAME_JSON__;
         const lodSummary = __LOD_MODE_LABEL_JSON__;
+        const viewBounds = __VIEW_BOUNDS_JSON__;
 
         let runCounter = 0;
         let interactionEnabled = false;
         let pendingInteraction = null;
         let currentViewer = null;
+        let orbitDrag = null;
         let frameCount = 0;
         let lastFpsTs = performance.now();
 
@@ -318,36 +320,55 @@
             lastFpsTs = now;
         }
 
+        function applyCenteredCamera(camera, center, radius) {
+            const vFov = THREE.MathUtils.degToRad(camera.fov);
+            const hFov = 2 * Math.atan(Math.tan(vFov / 2) * Math.max(camera.aspect, 1));
+            const fitDistance = Math.max(
+                radius / Math.sin(vFov / 2),
+                radius / Math.sin(hFov / 2)
+            );
+            const distance = Math.max(fitDistance * 1.25, 4.5);
+            const viewDir = new THREE.Vector3(0.62, 0.36, 1).normalize();
+
+            camera.zoom = 1;
+            camera.position.copy(center).addScaledVector(viewDir, distance);
+            camera.near = Math.max(distance / 500, 0.01);
+            camera.far = Math.max(distance * 20, 100);
+            camera.lookAt(center);
+            camera.updateProjectionMatrix();
+            if (currentViewer) {
+                currentViewer.target.copy(center);
+            }
+        }
+
         function fitCameraToMesh(mesh, camera, onDone, retries) {
             retries = retries || 0;
             try {
-                if (!mesh.packedSplats && !mesh.extSplats) {
-                    if (retries < 60) {
-                        setTimeout(function() { fitCameraToMesh(mesh, camera, onDone, retries + 1); }, 250);
-                        return;
-                    }
-                    console.warn("fitCameraToMesh: splat data not available after timeout, using default camera");
-                    camera.position.set(3, 0.8, 5);
-                    camera.lookAt(0, 0, 0);
-                    camera.updateProjectionMatrix();
+                if (
+                    viewBounds
+                    && Array.isArray(viewBounds.center)
+                    && viewBounds.center.length === 3
+                    && Number.isFinite(viewBounds.radius)
+                    && viewBounds.radius > 0
+                ) {
+                    applyCenteredCamera(
+                        camera,
+                        new THREE.Vector3(viewBounds.center[0], viewBounds.center[1], viewBounds.center[2]),
+                        viewBounds.radius
+                    );
                     if (onDone) onDone();
                     return;
                 }
+
+                mesh.updateMatrixWorld(true);
                 const bounds = mesh.getBoundingBox(false);
                 const sphere = new THREE.Sphere();
                 bounds.getBoundingSphere(sphere);
 
                 const radius = Math.max(sphere.radius, 0.75);
-                const distance = Math.max(radius * 2.8, 3.0);
-                camera.position.set(
-                    sphere.center.x + distance * 0.7,
-                    sphere.center.y + distance * 0.12,
-                    sphere.center.z + distance
-                );
-                camera.near = Math.max(distance / 200, 0.01);
-                camera.far = Math.max(distance * 20, 100);
-                camera.lookAt(sphere.center);
-                camera.updateProjectionMatrix();
+                const center = sphere.center.clone().applyMatrix4(mesh.matrixWorld);
+
+                applyCenteredCamera(camera, center, radius);
                 if (onDone) onDone();
             } catch (e) {
                 if (retries < 60) {
@@ -355,9 +376,7 @@
                     setTimeout(function() { fitCameraToMesh(mesh, camera, onDone, retries + 1); }, 250);
                 } else {
                     console.error("fitCameraToMesh: failed after retries", e);
-                    camera.position.set(3, 0.8, 5);
-                    camera.lookAt(0, 0, 0);
-                    camera.updateProjectionMatrix();
+                    applyCenteredCamera(camera, new THREE.Vector3(0, 0, 0), 2.5);
                     if (onDone) onDone();
                 }
             }
@@ -367,7 +386,7 @@
             container.innerHTML = '';
 
             const scene = new THREE.Scene();
-            const camera = new THREE.PerspectiveCamera(60, 1, 0.01, 1000);
+            const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
             const renderer = new THREE.WebGLRenderer({
                 antialias: false,
                 alpha: true,
@@ -387,7 +406,7 @@
             const controls = new SparkControls({
                 canvas: renderer.domElement
             });
-            controls.scrollSpeed = 6e-3;
+            controls.scrollSpeed = 6e-2;
 
             renderer.setPixelRatio(
                 isLargeModel
@@ -424,8 +443,10 @@
                 controls,
                 onResize,
                 mesh: null,
+                target: new THREE.Vector3(0, 0, 0),
                 sceneReadyTs: null,
                 firstFrameRecorded: false,
+                controlsEnabled: false,
                 eventType: '',
                 clickTs: 0,
                 requestStartTs: 0,
@@ -435,15 +456,16 @@
             window.addEventListener('resize', onResize);
             onResize();
 
-            camera.position.set(2.5, 1.5, 5.5);
+            camera.zoom = 1;
+            camera.position.set(8, 4.8, 12);
             camera.lookAt(0, 0, 0);
+            camera.updateProjectionMatrix();
 
             renderer.domElement.addEventListener('pointerdown', () => {
                 renderer.domElement.focus();
             });
 
             renderer.setAnimationLoop(() => {
-                controls.update(camera);
                 renderer.render(scene, camera);
                 updateFPS();
 
@@ -568,16 +590,68 @@
             perfToggle.innerText = interactionEnabled ? 'Hide metrics panel' : 'Show metrics panel';
         });
         perfButton.addEventListener('click', () => loadScene('manual_retest'));
-        container.addEventListener('pointerdown', () => {
+        container.addEventListener('pointerdown', (event) => {
             if (currentViewer) {
+                const camera = currentViewer.camera;
+                const target = currentViewer.target || new THREE.Vector3(0, 0, 0);
+                orbitDrag = {
+                    pointerId: event.pointerId,
+                    x: event.clientX,
+                    y: event.clientY,
+                    offset: camera.position.clone().sub(target),
+                    target: target.clone()
+                };
+                container.setPointerCapture?.(event.pointerId);
                 armInteractionMeasurement(currentViewer.camera, 'rotate_or_pan', 'pointerdown');
             }
         });
-        container.addEventListener('wheel', () => {
+        container.addEventListener('pointermove', (event) => {
+            if (!currentViewer || !orbitDrag || orbitDrag.pointerId !== event.pointerId) {
+                return;
+            }
+            event.preventDefault();
+            const dx = event.clientX - orbitDrag.x;
+            const dy = event.clientY - orbitDrag.y;
+            const spherical = new THREE.Spherical().setFromVector3(orbitDrag.offset);
+            spherical.theta -= dx * 0.006;
+            spherical.phi -= dy * 0.006;
+            spherical.phi = THREE.MathUtils.clamp(spherical.phi, 0.08, Math.PI - 0.08);
+            const nextOffset = new THREE.Vector3().setFromSpherical(spherical);
+            currentViewer.camera.position.copy(orbitDrag.target).add(nextOffset);
+            currentViewer.camera.lookAt(orbitDrag.target);
+            currentViewer.camera.updateProjectionMatrix();
+        });
+        const finishOrbitDrag = (event) => {
+            if (orbitDrag && (!event || orbitDrag.pointerId === event.pointerId)) {
+                try {
+                    container.releasePointerCapture?.(orbitDrag.pointerId);
+                } catch (_) {}
+                orbitDrag = null;
+            }
+        };
+        container.addEventListener('pointerup', finishOrbitDrag);
+        container.addEventListener('pointercancel', finishOrbitDrag);
+        container.addEventListener('pointerleave', finishOrbitDrag);
+        container.addEventListener('wheel', (event) => {
             if (currentViewer) {
+                event.preventDefault();
+                const camera = currentViewer.camera;
+                const target = currentViewer.target || new THREE.Vector3(0, 0, 0);
+                const offset = camera.position.clone().sub(target);
+                const direction = event.deltaY > 0 ? 1 : -1;
+                const scale = Math.exp(direction * 0.22);
+                const nextDistance = THREE.MathUtils.clamp(
+                    offset.length() * scale,
+                    Math.max(camera.near * 20, 0.05),
+                    Math.max(camera.far * 0.45, 100)
+                );
+                offset.setLength(nextDistance);
+                camera.position.copy(target).add(offset);
+                camera.lookAt(target);
+                camera.updateProjectionMatrix();
                 armInteractionMeasurement(currentViewer.camera, 'zoom', 'wheel');
             }
-        }, { passive: true });
+        }, { passive: false });
         loadScene('auto_initial');
     </script>
 </body>

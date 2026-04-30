@@ -31,6 +31,7 @@ static/splat_files/source/*.ksplat
 static/splat_files/derived/**
 !static/splat_files/derived/
 !static/splat_files/derived/README.md
+static/splat_files/_bounds/*.json
 static/splat_files/_pipeline/*.json
 !static/splat_files/_pipeline/README.md
 !static/splat_files/source/README.md

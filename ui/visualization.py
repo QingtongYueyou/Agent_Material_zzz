@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from functools import partial
@@ -16,10 +17,14 @@ from config.settings import BASE_DIR, SPLAT_DERIVED_DIR, SPLAT_DIR, SPLAT_SOURCE
 from core.perf_metrics import (
     append_interaction_metric,
     append_render_metric,
+    get_ply_bounds,
     get_ply_vertex_count,
 )
 from core.processor import HAS_PYMATGEN
 from core.spark_asset_ingest import get_auto_ingest_status
+
+
+logger = logging.getLogger(__name__)
 
 
 class _CORSRequestHandler(SimpleHTTPRequestHandler):
@@ -244,7 +249,7 @@ def _select_manifest_asset(manifest_path: Path, quality_preference: str) -> dict
         else:
             selection_note = f"Manifest '{manifest_path.name}' -> variant '{variant_name}'"
 
-        return _build_asset_record(
+        asset_record = _build_asset_record(
             resolved_path,
             asset_id=asset_id,
             variant_name=variant_name,
@@ -254,6 +259,22 @@ def _select_manifest_asset(manifest_path: Path, quality_preference: str) -> dict
             enable_lod=bool(payload.get("lod")) if "lod" in payload else None,
             enable_paged=bool(payload.get("paged")) if "paged" in payload else None,
         )
+        if asset_record is None:
+            continue
+
+        raw_source_path = payload.get("source_path")
+        if not isinstance(raw_source_path, str) or not raw_source_path.strip():
+            source_payload = variants.get("source")
+            if isinstance(source_payload, dict):
+                source_candidate = source_payload.get("path") or source_payload.get("file")
+                raw_source_path = source_candidate if isinstance(source_candidate, str) else ""
+
+        if raw_source_path:
+            source_path = _resolve_asset_path(raw_source_path, manifest_path)
+            if source_path is not None:
+                asset_record["view_bounds"] = get_ply_bounds(source_path)
+
+        return asset_record
 
     return None
 
@@ -344,7 +365,10 @@ def _render_asset_pipeline_status() -> None:
     summary = status.get("summary")
     if isinstance(summary, dict) and int(summary.get("errors", 0) or 0) > 0:
         error_count = int(summary.get("errors", 0) or 0)
-        st.warning(f"最近一次 3D 资产自动构建有 {error_count} 个失败项；未变更的失败源文件不会重复重试。")
+        logger.info(
+            "Last 3D asset auto-build completed with %s error(s); hidden from UI.",
+            error_count,
+        )
         return
 
     if isinstance(summary, dict) and int(summary.get("built", 0) or 0) > 0:
@@ -372,6 +396,7 @@ def _build_spark_viewer_html(
     lod_mode_label: str,
     metrics_url: str,
     interaction_metrics_url: str,
+    view_bounds: dict[str, Any] | None = None,
 ) -> str:
     if not _TEMPLATE_PATH.exists():
         return """
@@ -425,6 +450,7 @@ def _build_spark_viewer_html(
         ("__ENABLE_LOD_JSON__", json.dumps(enable_lod)),
         ("__ENABLE_PAGED_JSON__", json.dumps(enable_paged)),
         ("__LOD_MODE_LABEL_JSON__", json.dumps(lod_mode_label)),
+        ("__VIEW_BOUNDS_JSON__", json.dumps(view_bounds)),
         ("__METRICS_URL__", metrics_url),
         ("__INTERACTION_METRICS_URL__", interaction_metrics_url),
     ]
@@ -477,18 +503,6 @@ def render_visualization_panel() -> None:
     viz = st.session_state.viz_data
     filename = viz["filename"]
 
-    st.markdown(
-        """
-        <div class="card" style="margin-bottom: 1rem;">
-            <div class="card-header">
-                <div class="card-number">0</div>
-                <div class="card-title">3D Gaussian Splatting 视图 (WebGL)</div>
-                <div class="card-icon">✨</div>
-            </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     quality_options = ["auto", "preview", "balanced", "full", "source"]
     quality_labels = {
         "auto": "Auto",
@@ -497,13 +511,26 @@ def render_visualization_panel() -> None:
         "full": "Full",
         "source": "Source",
     }
-    st.selectbox(
-        "3D Asset Quality",
-        options=quality_options,
-        format_func=lambda option: quality_labels[option],
-        key="splat_quality",
-        help="When a manifest exists, choose which prebuilt asset variant to load.",
-    )
+    title_col, quality_select_col = st.columns([0.68, 0.32], gap="small")
+    with title_col:
+        st.markdown(
+            """
+            <div class="viewer-toolbar-title">
+                <span class="viewer-toolbar-index">1</span>
+                <span>3D Gaussian Splatting 视图 (WebGL)</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with quality_select_col:
+        st.selectbox(
+            "3D Asset Quality",
+            options=quality_options,
+            format_func=lambda option: quality_labels[option],
+            key="splat_quality",
+            help="When a manifest exists, choose which prebuilt asset variant to load.",
+            label_visibility="collapsed",
+        )
     asset_info = _resolve_splat_asset(filename, st.session_state.get("splat_quality", "auto"))
 
     cif_basename = os.path.splitext(filename)[0]
@@ -604,11 +631,9 @@ def render_visualization_panel() -> None:
         metrics_url = f"http://127.0.0.1:{port}/__perf/render-metrics"
         interaction_metrics_url = f"http://127.0.0.1:{port}/__perf/interaction-metrics"
 
-        if asset_info is not None:
-            st.caption(str(asset_info["selection_note"]))
-        elif file_name_only == "object.ply":
+        if asset_info is None and file_name_only == "object.ply":
             st.caption(f"ℹ️ 未找到专属模型，展示测试文件: `{file_name_only}`")
-        else:
+        elif asset_info is None:
             st.caption(f"✅ 已加载模型: `{file_name_only}`")
 
         # Keep the previous viewer template inert so the Spark rollout stays localized.
@@ -1015,25 +1040,22 @@ def render_visualization_panel() -> None:
             lod_mode_label=lod_mode_label,
             metrics_url=metrics_url,
             interaction_metrics_url=interaction_metrics_url,
+            view_bounds=asset_info.get("view_bounds") if asset_info is not None else None,
         )
         components.html(gs_html, height=350)
     else:
         st.warning("⚠️ 在 `static/splat_files` 中未找到匹配的模型文件。")
         st.markdown(f"<small>搜索路径: {SPLAT_DIR}</small>", unsafe_allow_html=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)
-
     viz_col1, viz_col2 = st.columns(2, gap="medium")
 
     with viz_col1:
         st.markdown(
             """
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-number">1</div>
-                    <div class="card-title">晶胞参数 (Lattice)</div>
-                    <div class="card-icon">📏</div>
-                </div>
+            <div class="chart-toolbar-title">
+                <span class="chart-toolbar-index">2</span>
+                <span>晶胞参数 (Lattice)</span>
+            </div>
             """,
             unsafe_allow_html=True,
         )
@@ -1071,7 +1093,6 @@ def render_visualization_panel() -> None:
                     ({max_axis['Value']:.2f} Å)。
                 </div>
             </div>
-            </div>
             """,
             unsafe_allow_html=True,
         )
@@ -1079,12 +1100,10 @@ def render_visualization_panel() -> None:
     with viz_col2:
         st.markdown(
             """
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-number">2</div>
-                    <div class="card-title">化学组分 (Composition)</div>
-                    <div class="card-icon">🧪</div>
-                </div>
+            <div class="chart-toolbar-title">
+                <span class="chart-toolbar-index">3</span>
+                <span>化学组分 (Composition)</span>
+            </div>
             """,
             unsafe_allow_html=True,
         )
@@ -1118,7 +1137,6 @@ def render_visualization_panel() -> None:
                     该结构包含 <span class="highlight">{len(viz['comp_df'])} 种元素</span>：{elements_str}。
                 </div>
             </div>
-            </div>
             """,
             unsafe_allow_html=True,
         )
@@ -1126,12 +1144,10 @@ def render_visualization_panel() -> None:
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown(
         """
-        <div class="card">
-            <div class="card-header">
-                <div class="card-number">3</div>
-                <div class="card-title">模拟 XRD 图谱 (Cu-Kα, λ=1.5406 Å)</div>
-                <div class="card-icon">📉</div>
-            </div>
+        <div class="chart-toolbar-title">
+            <span class="chart-toolbar-index">4</span>
+            <span>模拟 XRD 图谱 (Cu-Kα, λ=1.5406 Å)</span>
+        </div>
         """,
         unsafe_allow_html=True,
     )
@@ -1168,6 +1184,6 @@ def render_visualization_panel() -> None:
         st.info("无法生成 XRD 数据（可能是非周期性结构或解析错误）。")
 
     st.markdown(
-        f"<div style='text-align:right; font-size:0.7rem; color:#cbd5e0; margin-top:0.5rem;'>Source File: {filename}</div></div>",
+        f"<div style='text-align:right; font-size:0.7rem; color:#cbd5e0; margin-top:0.5rem;'>Source File: {filename}</div>",
         unsafe_allow_html=True,
     )
