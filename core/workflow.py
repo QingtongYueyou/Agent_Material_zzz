@@ -154,6 +154,7 @@ def _update_context_from_tool(ctx: WorkflowContext, tool_name: str, result: Any)
 
     ctx.viz_result = {
         "filename": fname,
+        "cif_path": cif_path,
         "lattice_df": lat,
         "comp_df": comp,
         "xrd_df": xrd,

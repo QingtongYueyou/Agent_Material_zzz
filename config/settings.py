@@ -27,6 +27,17 @@ SPARK_AUTO_INGEST = (os.getenv("SPARK_AUTO_INGEST", "true") or "true").strip().l
     "yes",
     "on",
 }
+MCP_ENABLED = (os.getenv("MCP_ENABLED", "true") or "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://219.232.220.140/view_mcp/mcp")
+MCP_API_KEY = os.getenv("MCP_API_KEY", "")
+MCP_TIMEOUT_SEC = int(os.getenv("MCP_TIMEOUT_SEC", "60"))
+MCP_RENDER_TTL_SEC = int(os.getenv("MCP_RENDER_TTL_SEC", "600"))
+MCP_REFRESH_SKEW_SEC = int(os.getenv("MCP_REFRESH_SKEW_SEC", "30"))
 
 
 def _resolve_spark_root() -> Path:

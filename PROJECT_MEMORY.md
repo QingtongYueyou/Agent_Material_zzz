@@ -46,7 +46,7 @@ Current user flow:
 5. `core/tools.py` calls Materials Project through `mp_api.client.MPRester`.
 6. Structure retrieval writes a CIF file to `cif_files/`.
 7. `core/processor.py` parses the CIF with pymatgen and creates DataFrames for lattice parameters, composition, and simulated XRD.
-8. `ui/visualization.py` renders the 3DGS/WebGL panel plus Altair charts.
+8. `ui/visualization.py` renders the 3DGS/WebGL panel plus an optional MCP iframe panel and Altair charts.
 9. Final answer is generated from structured facts; if LLM generation fails, a template fallback is used.
 
 Server-B planner flow:
@@ -63,6 +63,7 @@ Server-B planner flow:
   - Loads `.env`.
   - Defines project paths, metrics paths, API keys, LLM model id, and timeout.
   - Important env vars: `MP_API_KEY` or `MAPI_KEY`, `POE_API_KEY`, `POE_API_BASE_URL`, `LLM_MODEL_ID`, `LLM_TIMEOUT_SEC`, `PLAN_API_TOKEN`.
+  - MCP env vars: `MCP_ENABLED`, `MCP_SERVER_URL`, `MCP_API_KEY`, `MCP_TIMEOUT_SEC`, `MCP_RENDER_TTL_SEC`, `MCP_REFRESH_SKEW_SEC`.
   - Do not expose `.env` contents in summaries or commits.
 
 - `core/tools.py`
@@ -89,6 +90,12 @@ Server-B planner flow:
   - Supports tools and tool choice.
   - Raises `LLMClientError`.
   - Some error strings appear encoding-damaged and may need cleanup.
+
+- `core/mcp_client.py`
+  - Lightweight urllib JSON-RPC client for the external FZ MCP visualization server.
+  - Supports `initialize`, `tools/list`, `fz.process_file`, and `fz.process_http`.
+  - `process_file` sends the selected CIF as base64 and returns a temporary `render_url`.
+  - Render URLs are treated as 10-minute cached values by default; UI refreshes stale MCP URLs independently from local 3DGS.
 
 - `core/answer_generator.py`
   - Used mainly by the older fixed-step flow.
@@ -118,6 +125,7 @@ Server-B planner flow:
   - Starts a local CORS-enabled static/metrics HTTP server, default port `8001`.
   - Renders Gaussian Splatting models with browser-side Three.js and `@mkkellogg/gaussian-splats-3d`.
   - Matches models from `static/splat_files` by `mp-id_formula`, `mp-id`, `formula`, glob patterns, then falls back to `object.ply`.
+  - Keeps local 3DGS as the default tab and adds an optional MCP tab that users trigger explicitly.
   - Posts render and interaction metrics back to local endpoints.
   - Renders Altair charts for lattice, composition, and XRD.
 

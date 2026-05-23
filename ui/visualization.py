@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import threading
+import time
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -13,7 +14,15 @@ import altair as alt
 import streamlit as st
 import streamlit.components.v1 as components
 
-from config.settings import BASE_DIR, SPLAT_DERIVED_DIR, SPLAT_DIR, SPLAT_SOURCE_DIR
+from config.settings import (
+    BASE_DIR,
+    MCP_ENABLED,
+    MCP_REFRESH_SKEW_SEC,
+    SPLAT_DERIVED_DIR,
+    SPLAT_DIR,
+    SPLAT_SOURCE_DIR,
+)
+from core.mcp_client import MCPClientError, is_render_url_fresh, process_file
 from core.perf_metrics import (
     append_interaction_metric,
     append_render_metric,
@@ -462,47 +471,92 @@ def _build_spark_viewer_html(
     return html
 
 
-def render_visualization_panel() -> None:
+def _mcp_cache_key(cif_path: str) -> str:
+    return f"mcp_render::{cif_path}"
+
+
+def _format_remaining_time(expires_at: float | int | None) -> str:
+    if expires_at is None:
+        return "未知"
+    remaining = max(0, int(float(expires_at) - time.time()))
+    minutes, seconds = divmod(remaining, 60)
+    if minutes:
+        return f"{minutes} 分 {seconds} 秒"
+    return f"{seconds} 秒"
+
+
+def _render_mcp_view(viz: dict[str, Any]) -> None:
     st.markdown(
         """
-        <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.8rem;">
-            <span class="section-label label-b">B</span>
-            <span style="font-size: 1rem; font-weight: 700; color: #1a202c;">可视化探索</span>
-        </div>
-        <div style="font-size: 0.8rem; color: #64748b; margin-bottom: 1rem;">
-            📊 结构数据视图 · <span class="badge badge-blue">动态生成</span>
+        <div class="viewer-toolbar-title">
+            <span class="viewer-toolbar-index">M</span>
+            <span>MCP 外部可视化视图</span>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    _render_asset_pipeline_status()
-    if not HAS_PYMATGEN:
-        st.error("⚠️ 未检测到 `pymatgen` 库。可视化功能受限。请运行 `pip install pymatgen`。")
-
-    if st.session_state.viz_data is None:
-        if st.session_state.messages:
-            st.info("💡 请在左侧输入材料名称（如 LiFePO4），AI 将获取结构并在此生成分析图表。")
-            st.markdown(
-                """
-                <div class="card" style="height: 200px; display: flex; align-items: center; justify-content: center; color: #cbd5e0;">
-                    等待数据输入...
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                """
-                <div class="card" style="height: 200px;"></div>
-                """,
-                unsafe_allow_html=True,
-            )
+    if not MCP_ENABLED:
+        st.info("MCP 可视化当前已关闭。设置 `MCP_ENABLED=true` 后可启用。")
         return
 
-    viz = st.session_state.viz_data
-    filename = viz["filename"]
+    cif_path = str(viz.get("cif_path") or "")
+    if not cif_path:
+        st.warning("当前结构没有可发送给 MCP 的 CIF 文件路径。")
+        return
 
+    cache_key = _mcp_cache_key(cif_path)
+    cached = st.session_state.get(cache_key)
+    is_fresh = (
+        isinstance(cached, dict)
+        and cached.get("ok")
+        and is_render_url_fresh(cached.get("expires_at"), skew_sec=MCP_REFRESH_SKEW_SEC)
+    )
+
+    action_col, status_col = st.columns([0.42, 0.58], gap="small")
+    with action_col:
+        label = "刷新 MCP 视图" if cached else "生成 MCP 视图"
+        request_clicked = st.button(label, key=f"{cache_key}::request", use_container_width=True)
+    with status_col:
+        if is_fresh:
+            st.caption(f"MCP URL 剩余有效期：{_format_remaining_time(cached.get('expires_at'))}")
+        elif cached:
+            st.caption("MCP URL 已过期或即将过期，请刷新后继续查看。")
+        else:
+            st.caption("点击后会将当前 CIF 以 base64 发送到 MCP 服务生成临时视图。")
+
+    needs_auto_refresh = isinstance(cached, dict) and cached.get("ok") and not is_fresh
+    if request_clicked or needs_auto_refresh:
+        with st.spinner("正在请求 MCP 生成可视化地址..."):
+            try:
+                cached = process_file(cif_path)
+                st.session_state[cache_key] = cached
+                is_fresh = True
+            except MCPClientError as exc:
+                cached = {"ok": False, "error": str(exc), "created_at": time.time()}
+                st.session_state[cache_key] = cached
+                is_fresh = False
+
+    if isinstance(cached, dict) and cached.get("ok") and cached.get("render_url"):
+        components.iframe(str(cached["render_url"]), height=520, scrolling=False)
+        st.caption(f"Source File: `{cached.get('filename') or Path(cif_path).name}`")
+        return
+
+    if isinstance(cached, dict) and cached.get("error"):
+        st.warning(f"MCP 可视化暂不可用：{cached['error']}")
+    else:
+        st.markdown(
+            """
+            <div class="card" style="height: 220px; display: flex; align-items: center; justify-content: center; color: #94a3b8;">
+                等待生成 MCP 可视化...
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+
+def _render_3dgs_view(viz: dict[str, Any], filename: str) -> None:
     quality_options = ["auto", "preview", "balanced", "full", "source"]
     quality_labels = {
         "auto": "Auto",
@@ -1046,6 +1100,54 @@ def render_visualization_panel() -> None:
     else:
         st.warning("⚠️ 在 `static/splat_files` 中未找到匹配的模型文件。")
         st.markdown(f"<small>搜索路径: {SPLAT_DIR}</small>", unsafe_allow_html=True)
+
+
+def render_visualization_panel() -> None:
+    st.markdown(
+        """
+        <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.8rem;">
+            <span class="section-label label-b">B</span>
+            <span style="font-size: 1rem; font-weight: 700; color: #1a202c;">可视化探索</span>
+        </div>
+        <div style="font-size: 0.8rem; color: #64748b; margin-bottom: 1rem;">
+            📊 结构数据视图 · <span class="badge badge-blue">动态生成</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    _render_asset_pipeline_status()
+    if not HAS_PYMATGEN:
+        st.error("⚠️ 未检测到 `pymatgen` 库。可视化功能受限。请运行 `pip install pymatgen`。")
+
+    if st.session_state.viz_data is None:
+        if st.session_state.messages:
+            st.info("💡 请在左侧输入材料名称（如 LiFePO4），AI 将获取结构并在此生成分析图表。")
+            st.markdown(
+                """
+                <div class="card" style="height: 200px; display: flex; align-items: center; justify-content: center; color: #cbd5e0;">
+                    等待数据输入...
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                """
+                <div class="card" style="height: 200px;"></div>
+                """,
+                unsafe_allow_html=True,
+            )
+        return
+
+    viz = st.session_state.viz_data
+    filename = viz["filename"]
+
+    view_3dgs_tab, view_mcp_tab = st.tabs(["3DGS 本地视图", "MCP 外部视图"])
+    with view_3dgs_tab:
+        _render_3dgs_view(viz, filename)
+    with view_mcp_tab:
+        _render_mcp_view(viz)
 
     viz_col1, viz_col2 = st.columns(2, gap="medium")
 

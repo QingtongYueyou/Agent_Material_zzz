@@ -32,8 +32,14 @@
 2. `core/workflow.py` 使用 function calling 决定是否调用材料检索或结构工具。
 3. `core/tools.py` 调用 MP API 并写入 CIF。
 4. `core/processor.py` 解析本次 CIF 生成晶格、组分、XRD 数据。
-5. `ui/visualization.py` 渲染 3DGS 与图表。
+5. `ui/visualization.py` 默认渲染本地 3DGS 与图表；可在 MCP 视图中手动生成外部 iframe 可视化。
 6. 工作流基于事实数据生成最终回答，失败时回退模板。
+
+### 可选 MCP 可视化
+
+本项目保留原有本地 3DGS 作为默认视图，同时可接入外部 MCP 分子/晶体可视化服务。MCP 视图不会自动上传文件，用户在 Streamlit 的 “MCP 外部视图” tab 中点击生成后，当前 CIF 会以 base64 发送给 MCP，服务返回一个临时 `render_url`，前端用 iframe 展示。
+
+MCP 返回的 `render_url` 默认按 10 分钟有效期处理，过期或即将过期时只刷新 MCP 视图，不影响本地 3DGS。
 
 ## Planner API 主流程
 1. 服务器 A 将用户自然语言和上下文通过 HTTP POST 发给本项目。
@@ -288,6 +294,12 @@ Authorization: Bearer your-shared-secret
 - `LLM_TIMEOUT_SEC`：LLM 超时时间
 - `MP_API_KEY` 或 `MAPI_KEY`：Materials Project API key
 - `PLAN_API_TOKEN`：Planner API 可选 Bearer token
+- `MCP_ENABLED`：是否启用 MCP 视图，默认 `true`
+- `MCP_SERVER_URL`：MCP JSON-RPC 地址
+- `MCP_API_KEY`：MCP 请求头 `visualization-api-key` 对应的密钥
+- `MCP_TIMEOUT_SEC`：MCP 请求超时时间
+- `MCP_RENDER_TTL_SEC`：MCP 返回 URL 的有效期，默认 `600`
+- `MCP_REFRESH_SKEW_SEC`：提前刷新缓冲秒数，默认 `30`
 
 ## 关键依赖
 - `streamlit`
