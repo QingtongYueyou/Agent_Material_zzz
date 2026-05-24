@@ -174,6 +174,12 @@ def asset_pipeline() -> dict[str, Any]:
     return get_auto_ingest_status()
 
 
+@app.get("/api/cif")
+def cif_file(path: str = Query(..., min_length=1)) -> FileResponse:
+    resolved = _resolve_cif_path(path)
+    return FileResponse(resolved, media_type="chemical/x-cif", filename=resolved.name)
+
+
 def _resolve_cif_path(raw_path: str) -> Path:
     candidate = Path(raw_path)
     if not candidate.is_absolute():

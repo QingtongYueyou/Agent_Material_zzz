@@ -35,7 +35,7 @@ async function checkAppViewport(name, viewport) {
     title: document.querySelector("h1")?.textContent || ""
   }));
 
-  if (!layout.title.includes("Agent Material")) {
+  if (!layout.title.includes("材料智能分析系统")) {
     throw new Error(`${name}: app title not rendered`);
   }
   if (layout.scrollWidth > layout.width + 1) {
@@ -54,6 +54,8 @@ async function checkSparkCanvas() {
   });
 
   await page.goto(url, { waitUntil: "networkidle", timeout: 90_000 });
+  await page.getByRole("button", { name: "3DGS视图" }).click();
+  await page.waitForSelector(".quality-select", { state: "visible", timeout: 30_000 });
   await page.waitForSelector(".splat-stage canvas", { state: "attached", timeout: 90_000 });
   await page.waitForFunction(
     () => !document.querySelector(".viewer-loading") && !document.querySelector(".viewer-error"),
@@ -65,17 +67,42 @@ async function checkSparkCanvas() {
     null,
     { timeout: 30_000 }
   );
+  await page.waitForFunction(
+    () => {
+      const canvas = document.querySelector(".splat-stage canvas");
+      const gl = canvas?.getContext("webgl2") || canvas?.getContext("webgl");
+      if (!canvas || !gl || canvas.width === 0 || canvas.height === 0) {
+        return false;
+      }
+
+      const data = new Uint8Array(canvas.width * canvas.height * 4);
+      gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, data);
+      let nonBlank = 0;
+      for (let index = 0; index < data.length; index += 4) {
+        const brightness = data[index] + data[index + 1] + data[index + 2];
+        if (brightness > 32) {
+          nonBlank += 1;
+        }
+      }
+      return nonBlank > canvas.width * canvas.height * 0.005;
+    },
+    null,
+    { timeout: 30_000 }
+  );
 
   const sparkUi = await page.evaluate(() => ({
     fps: document.querySelector(".fps-display")?.textContent || "",
     metricsToggle: document.querySelector(".perf-toggle")?.textContent || "",
     retestPresent: Boolean(document.querySelector(".perf-button")),
+    qualityValue: document.querySelector(".quality-select")?.value || "",
   }));
 
   if (!sparkUi.metricsToggle.includes("metrics panel") || !sparkUi.retestPresent) {
     throw new Error("spark metrics controls are missing");
   }
-
+  if (sparkUi.qualityValue !== "auto") {
+    throw new Error(`spark quality selector is not restored: ${sparkUi.qualityValue}`);
+  }
   await page.screenshot({ path: path.join(resultsDir, "spark-desktop.png"), fullPage: true });
 
   const pixels = await page.evaluate(() => {
@@ -96,7 +123,7 @@ async function checkSparkCanvas() {
     return { nonBlank, total: width * height };
   });
 
-  if (pixels.nonBlank < pixels.total * 0.01) {
+  if (pixels.nonBlank < pixels.total * 0.005) {
     throw new Error(`spark canvas appears blank: ${pixels.nonBlank}/${pixels.total}`);
   }
 

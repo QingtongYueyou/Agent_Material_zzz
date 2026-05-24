@@ -1,4 +1,4 @@
-import type { AssetPipelineStatus, HealthResponse, McpRenderResponse, SplatAsset, WorkflowEvent } from "./types";
+import type { AssetPipelineStatus, HealthResponse, McpRenderResponse, SplatAsset, VizData, WorkflowEvent } from "./types";
 
 const configuredBase = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
 
@@ -89,6 +89,11 @@ export async function getAssetPipeline(): Promise<AssetPipelineStatus> {
     throw new Error(`Asset pipeline status failed: ${response.status}`);
   }
   return response.json();
+}
+
+export function cifDownloadUrl(viz: VizData): string {
+  const path = viz.cif_path || viz.filename;
+  return apiUrl(`/api/cif?path=${encodeURIComponent(path)}`);
 }
 
 export async function renderMcp(cifPath: string): Promise<McpRenderResponse> {

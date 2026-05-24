@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import { DatabaseZap, Server, ShieldCheck } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Cuboid } from "lucide-react";
 import { getHealth, streamChat } from "./api";
 import { ChatPanel } from "./components/ChatPanel";
+import { DataSummaryPanel } from "./components/DataSummaryPanel";
 import { TracePanel } from "./components/TracePanel";
 import { VisualizationPanel } from "./components/VisualizationPanel";
 import type { ChatMessage, StepRow, VizData, WorkflowEvent } from "./types";
@@ -20,6 +21,8 @@ export default function App() {
   const [traceId, setTraceId] = useState("");
   const [running, setRunning] = useState(false);
   const [backendOk, setBackendOk] = useState(false);
+  const streamingIdRef = useRef<string | null>(null);
+  const hasAnswer = messages.some((message) => message.role === "assistant" && message.content.trim().length > 0);
 
   useEffect(() => {
     getHealth()
@@ -45,19 +48,13 @@ export default function App() {
     });
   }, []);
 
-  const latestMaterial = useMemo(() => {
-    if (!viz?.filename) {
-      return "未选择";
-    }
-    return viz.filename.replace(/\.cif$/i, "");
-  }, [viz?.filename]);
-
   async function submitQuery(query: string) {
     setMessages((current) => [...current, { id: makeId("user"), role: "user", content: query }]);
     setSteps([]);
     setViz(null);
     setTraceId("");
     setRunning(true);
+    streamingIdRef.current = null;
 
     try {
       await streamChat(query, handleWorkflowEvent);
@@ -68,6 +65,7 @@ export default function App() {
         { id: makeId("assistant"), role: "assistant", content: `后端请求失败：${message}` }
       ]);
     } finally {
+      streamingIdRef.current = null;
       setRunning(false);
     }
   }
@@ -107,13 +105,45 @@ export default function App() {
       return;
     }
 
+    if (event.type === "answer_delta") {
+      const delta = event.delta ?? "";
+      if (!delta) return;
+
+      setMessages((current) => {
+        const id = streamingIdRef.current;
+        if (id) {
+          const idx = current.findIndex((m) => m.id === id);
+          if (idx >= 0) {
+            const next = [...current];
+            next[idx] = { ...next[idx], content: next[idx].content + delta };
+            return next;
+          }
+        }
+        const newId = makeId("assistant");
+        streamingIdRef.current = newId;
+        return [...current, { id: newId, role: "assistant", content: delta, streaming: true }];
+      });
+      return;
+    }
+
     if (event.type === "final") {
       setTraceId(event.trace_id ?? "");
       setViz(event.viz ?? null);
-      setMessages((current) => [
-        ...current,
-        { id: makeId("assistant"), role: "assistant", content: event.answer ?? "" }
-      ]);
+      const finalAnswer = event.answer ?? "";
+      const streamId = streamingIdRef.current;
+
+      setMessages((current) => {
+        if (streamId) {
+          const idx = current.findIndex((m) => m.id === streamId);
+          if (idx >= 0) {
+            const next = [...current];
+            next[idx] = { ...next[idx], content: finalAnswer || next[idx].content, streaming: false };
+            return next;
+          }
+        }
+        return [...current, { id: makeId("assistant"), role: "assistant", content: finalAnswer }];
+      });
+      streamingIdRef.current = null;
       return;
     }
 
@@ -130,31 +160,32 @@ export default function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={hasAnswer || viz ? "app-shell state-result" : "app-shell state-empty"}>
       <header className="top-bar">
         <div className="brand-lockup">
-          <DatabaseZap size={24} />
-          <div>
-            <h1>Agent Material Console</h1>
-            <span>{latestMaterial}</span>
-          </div>
+          <span className="brand-mark" aria-hidden="true">
+            <Cuboid size={36} strokeWidth={2.4} />
+          </span>
+          <span className="brand-divider" aria-hidden="true" />
+          <h1>材料智能分析系统</h1>
         </div>
         <div className="top-status">
-          <span className={backendOk ? "health good" : "health bad"}>
-            <Server size={15} />
-            Backend
-          </span>
-          <span className="health">
-            <ShieldCheck size={15} />
-            Frontend separated
+          <span className="product-name">MATERIAL AI ANALYSIS</span>
+          <span className="version-pill">v2.0</span>
+          <span className={backendOk ? "system-state good" : "system-state bad"}>
+            <i aria-hidden="true" />
+            {backendOk ? "系统运行正常" : "系统连接异常"}
           </span>
         </div>
       </header>
 
       <div className="main-grid">
-        <ChatPanel messages={messages} running={running} onSubmit={submitQuery} />
+        <ChatPanel messages={messages} running={running} viz={viz} onSubmit={submitQuery} />
         <VisualizationPanel viz={viz} />
-        <TracePanel steps={steps} traceId={traceId} />
+        <aside className="right-stack">
+          <TracePanel steps={steps} traceId={traceId} />
+          <DataSummaryPanel viz={viz} />
+        </aside>
       </div>
     </main>
   );

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { getHealth, renderMcp } from "../api";
 import type { McpRenderResponse, VizData } from "../types";
 
@@ -23,7 +23,7 @@ function formatRemainingTime(expiresAt?: number): string {
   return minutes > 0 ? `${minutes} 分 ${seconds} 秒` : `${seconds} 秒`;
 }
 
-export function McpViewer({ viz }: { viz: VizData | null }) {
+export function McpViewer({ viz, refreshKey = 0 }: { viz: VizData | null; refreshKey?: number }) {
   const [cached, setCached] = useState<McpRenderResponse | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -91,6 +91,13 @@ export function McpViewer({ viz }: { viz: VizData | null }) {
     const nextCached = mcpCache.get(cifPath) ?? null;
     setCached(nextCached);
 
+    const initialRenderKey = `${cifPath}:initial`;
+    if (!nextCached && mcpEnabled && !autoRefreshAttemptsRef.current.has(initialRenderKey)) {
+      autoRefreshAttemptsRef.current.add(initialRenderKey);
+      void requestRender(true);
+      return;
+    }
+
     const autoRefreshKey = `${cifPath}:${nextCached?.expires_at ?? "unknown"}`;
     if (
       nextCached?.ok
@@ -102,6 +109,12 @@ export function McpViewer({ viz }: { viz: VizData | null }) {
       void requestRender(true);
     }
   }, [cifPath, mcpEnabled, requestRender, skewSec]);
+
+  useEffect(() => {
+    if (refreshKey > 0) {
+      void requestRender(false);
+    }
+  }, [refreshKey, requestRender]);
 
   const statusText = useMemo(() => {
     if (!mcpEnabled) {
@@ -134,10 +147,6 @@ export function McpViewer({ viz }: { viz: VizData | null }) {
   return (
     <div className="mcp-shell">
       <div className="mcp-toolbar">
-        <button type="button" onClick={() => requestRender(false)} disabled={loading || !cifPath || !mcpEnabled}>
-          {loading ? <RefreshCw size={16} className="spin" /> : <ExternalLink size={16} />}
-          {renderUrl ? "刷新 MCP 视图" : "生成 MCP 视图"}
-        </button>
         {error ? <span className="mcp-error">{error}</span> : <span>{statusText}</span>}
       </div>
       {renderUrl ? (

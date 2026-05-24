@@ -3,6 +3,21 @@ import type { CompositionRecord, LatticeRecord, XrdRecord } from "../types";
 const palette = ["#24786d", "#d18b2f", "#7f557d", "#3f6f9f", "#9b4f38", "#5f7f3b"];
 
 export function LatticeChart({ data }: { data: LatticeRecord[] }) {
+  if (data.length === 0) {
+    return (
+      <div className="chart-block">
+        <div className="chart-head">
+          <span>晶胞参数</span>
+          <small>Lattice</small>
+        </div>
+        <div className="empty-state compact">
+          <strong>暂无晶胞数据</strong>
+          <span>完成结构获取后自动填充。</span>
+        </div>
+      </div>
+    );
+  }
+
   const values = data.map((item) => Number(item.value ?? 0));
   const max = Math.max(1, ...values);
   const maxAxis = data.reduce<LatticeRecord | null>((best, item) => {
@@ -52,6 +67,21 @@ export function LatticeChart({ data }: { data: LatticeRecord[] }) {
 }
 
 export function CompositionChart({ data }: { data: CompositionRecord[] }) {
+  if (data.length === 0) {
+    return (
+      <div className="chart-block">
+        <div className="chart-head">
+          <span>化学组成</span>
+          <small>Composition</small>
+        </div>
+        <div className="empty-state compact">
+          <strong>暂无组成数据</strong>
+          <span>元素比例会在分析完成后显示。</span>
+        </div>
+      </div>
+    );
+  }
+
   const total = data.reduce((sum, item) => sum + Number(item.count ?? 0), 0) || 1;
   const elements = data.map((item) => item.element).join(", ");
   let offset = 25;

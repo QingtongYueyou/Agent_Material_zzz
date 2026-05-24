@@ -8,6 +8,7 @@ import type { SplatAsset, VizData } from "../types";
 interface SplatViewerProps {
   viz: VizData | null;
   quality: string;
+  refreshKey?: number;
 }
 
 interface CameraSnapshot {
@@ -53,7 +54,7 @@ const initialSummary = [
   "Drag to rotate, wheel to move.",
 ];
 
-export function SplatViewer({ viz, quality }: SplatViewerProps) {
+export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<ViewerState | null>(null);
   const pendingInteractionRef = useRef<PendingInteraction | null>(null);
@@ -107,7 +108,7 @@ export function SplatViewer({ viz, quality }: SplatViewerProps) {
     return () => {
       cancelled = true;
     };
-  }, [quality, viz?.filename]);
+  }, [quality, refreshKey, viz?.filename]);
 
   useEffect(() => {
     interactionEnabledRef.current = metricsOpen;
@@ -241,8 +242,8 @@ export function SplatViewer({ viz, quality }: SplatViewerProps) {
       const vFov = THREE.MathUtils.degToRad(camera.fov);
       const hFov = 2 * Math.atan(Math.tan(vFov / 2) * Math.max(camera.aspect, 1));
       const fitDistance = Math.max(radius / Math.sin(vFov / 2), radius / Math.sin(hFov / 2));
-      const distance = Math.max(fitDistance * 1.25, 4.5);
-      const viewDir = new THREE.Vector3(0.62, 0.36, 1).normalize();
+      const distance = Math.max(fitDistance * 1.35, 3.2);
+      const viewDir = new THREE.Vector3(0.5, 0.35, 1).normalize();
 
       camera.zoom = 1;
       camera.position.copy(center).addScaledVector(viewDir, distance);
@@ -250,6 +251,7 @@ export function SplatViewer({ viz, quality }: SplatViewerProps) {
       camera.far = Math.max(distance * 20, 100);
       camera.lookAt(center);
       camera.updateProjectionMatrix();
+      camera.updateMatrixWorld(true);
       viewerRef.current?.target.copy(center);
     }
 
@@ -567,6 +569,18 @@ export function SplatViewer({ viz, quality }: SplatViewerProps) {
         return;
       }
 
+      const overModel = isPointerInsideModelFocus(event, viewer.camera, currentAsset, viewer.renderer.domElement);
+      const scrollHost = container.closest(".visual-workspace") as HTMLElement | null;
+      if (!overModel && scrollHost && scrollHost.scrollHeight > scrollHost.clientHeight + 1) {
+        const canScrollDown = event.deltaY > 0 && scrollHost.scrollTop + scrollHost.clientHeight < scrollHost.scrollHeight - 1;
+        const canScrollUp = event.deltaY < 0 && scrollHost.scrollTop > 0;
+        if (canScrollDown || canScrollUp) {
+          event.preventDefault();
+          scrollHost.scrollBy({ top: event.deltaY });
+          return;
+        }
+      }
+
       event.preventDefault();
       const { camera, target } = viewer;
       const offset = camera.position.clone().sub(target);
@@ -582,6 +596,53 @@ export function SplatViewer({ viz, quality }: SplatViewerProps) {
       camera.lookAt(target);
       camera.updateProjectionMatrix();
       armInteractionMeasurement(camera, "zoom", "wheel");
+    }
+
+    function isPointerInsideModelFocus(
+      event: WheelEvent,
+      camera: THREE.PerspectiveCamera,
+      currentAsset: SplatAsset,
+      canvas: HTMLCanvasElement,
+    ): boolean {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        return false;
+      }
+
+      const bounds = currentAsset.view_bounds;
+      const center = Array.isArray(bounds?.center) && bounds.center.length === 3
+        ? new THREE.Vector3(bounds.center[0] ?? 0, bounds.center[1] ?? 0, bounds.center[2] ?? 0)
+        : viewerRef.current?.target.clone() ?? new THREE.Vector3(0, 0, 0);
+      const radius = Number.isFinite(bounds?.radius) && Number(bounds?.radius) > 0
+        ? Number(bounds?.radius)
+        : 1;
+      const pointerX = event.clientX - rect.left;
+      const pointerY = event.clientY - rect.top;
+      const projectedCenter = center.clone().project(camera);
+
+      if (projectedCenter.z < -1 || projectedCenter.z > 1) {
+        return false;
+      }
+
+      const centerX = ((projectedCenter.x + 1) / 2) * rect.width;
+      const centerY = ((1 - projectedCenter.y) / 2) * rect.height;
+      const axes = [
+        new THREE.Vector3(radius, 0, 0),
+        new THREE.Vector3(-radius, 0, 0),
+        new THREE.Vector3(0, radius, 0),
+        new THREE.Vector3(0, -radius, 0),
+        new THREE.Vector3(0, 0, radius),
+        new THREE.Vector3(0, 0, -radius),
+      ];
+      const projectedRadius = axes.reduce((max, axis) => {
+        const point = center.clone().add(axis).project(camera);
+        const x = ((point.x + 1) / 2) * rect.width;
+        const y = ((1 - point.y) / 2) * rect.height;
+        return Math.max(max, Math.hypot(x - centerX, y - centerY));
+      }, 0);
+      const focusRadius = Math.max(72, projectedRadius * 1.22);
+
+      return Math.hypot(pointerX - centerX, pointerY - centerY) <= focusRadius;
     }
 
     container.addEventListener("pointerdown", handlePointerDown);
@@ -619,9 +680,28 @@ export function SplatViewer({ viz, quality }: SplatViewerProps) {
 
   if (!viz) {
     return (
-      <div className="viewer-empty">
-        <Box size={28} />
-        <span>暂无结构视图</span>
+      <div className="viewer-empty viewer-empty-showcase">
+        <div className="crystal-stage" aria-hidden="true">
+          <span className="stage-box">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span className="crystal-core" />
+          <span className="crystal-cloud cloud-a" />
+          <span className="crystal-cloud cloud-b" />
+          <span className="crystal-cloud cloud-c" />
+          <span className="particle particle-1" />
+          <span className="particle particle-2" />
+          <span className="particle particle-3" />
+          <span className="particle particle-4" />
+          <span className="particle particle-5" />
+          <span className="particle particle-6" />
+        </div>
+        <div className="viewer-empty-copy">
+          <strong>选择 3DGS 视图或 MCP 工具</strong>
+          <span>完成问答后，这里会加载结构模型和可视化工具链</span>
+        </div>
       </div>
     );
   }
