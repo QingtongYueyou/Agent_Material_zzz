@@ -44,3 +44,6 @@ tools/vendor/
 frontend/node_modules/
 frontend/dist/
 frontend/test-results/
+
+# Large binaries
+cloudflared.exe
