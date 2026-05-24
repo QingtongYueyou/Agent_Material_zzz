@@ -1,19 +1,21 @@
 # static 目录说明
 
-## 目录职责
-`static/` 存放前端可视化所需的静态资源。
+`static/` 保存可通过 FastAPI `/static` 路径访问的静态资源。
 
-## 子目录
-- `splat_files/`：3D Gaussian Splatting 模型文件
+## 3DGS 资产
 
-## 使用方式
-- `ui/visualization.py` 会启动本地静态服务读取此目录文件。
-- 3D 模型通过 `http://127.0.0.1:8001/static/splat_files/...` 加载。
+```text
+static/splat_files/
+  source/             原始 3DGS 资产
+  derived/            Spark 构建后的运行时资产和 manifest
+  _pipeline/          后台构建状态
+  _bounds/            PLY bounds 缓存
+```
 
-## 命名建议
-- 推荐：`mp-xxxx_formula.ply`
-- 回退：`object.ply`
+React 前端调用后端接口解析资产：
 
-## 维护建议
-- 新增模型后先验证命名是否与 CIF 文件名可匹配。
-- 大体积资源建议按需管理，避免仓库无序膨胀。
+```http
+GET /api/assets/splat/{filename}?quality=auto
+```
+
+后端通过 `core/splat_assets.py` 返回实际可加载的模型 URL。

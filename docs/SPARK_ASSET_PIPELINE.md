@@ -91,10 +91,10 @@ Older manifests with flat relative paths are still supported by compatibility lo
 
 ## Viewer behavior
 
-The Streamlit viewer resolves assets in this order:
+The React frontend asks the FastAPI backend to resolve assets in this order:
 
 1. derived manifest for the asset id
-2. selected manifest variant from `3D Asset Quality`
+2. selected manifest variant from the frontend quality selector
 3. direct file fallback for legacy assets
 4. generic `object` fallback
 
@@ -129,8 +129,8 @@ python tools/build_spark_assets.py sync --spark-root D:/tools/spark --variant ba
 ## Automatic ingest flow
 
 1. Put a new raw source asset into `static/splat_files/source/`
-2. Refresh or start the Streamlit app
-3. The app launches `tools/build_spark_assets.py sync` in the background
+2. Refresh or start the FastAPI backend
+3. The backend launches `tools/build_spark_assets.py sync` in the background
 4. The pipeline registers `source`
 5. The pipeline auto-builds the configured runtime variant, usually `balanced`
 6. The viewer loads the generated manifest and `.rad` runtime asset

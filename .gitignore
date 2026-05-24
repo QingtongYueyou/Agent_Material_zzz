@@ -39,3 +39,8 @@ static/splat_files/_pipeline/*.json
 
 # Spark build toolchain (vendored source, large)
 tools/vendor/
+
+# Frontend workspace
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
