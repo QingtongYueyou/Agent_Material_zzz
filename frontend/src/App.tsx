@@ -105,27 +105,6 @@ export default function App() {
       return;
     }
 
-    if (event.type === "answer_delta") {
-      const delta = event.delta ?? "";
-      if (!delta) return;
-
-      setMessages((current) => {
-        const id = streamingIdRef.current;
-        if (id) {
-          const idx = current.findIndex((m) => m.id === id);
-          if (idx >= 0) {
-            const next = [...current];
-            next[idx] = { ...next[idx], content: next[idx].content + delta };
-            return next;
-          }
-        }
-        const newId = makeId("assistant");
-        streamingIdRef.current = newId;
-        return [...current, { id: newId, role: "assistant", content: delta, streaming: true }];
-      });
-      return;
-    }
-
     if (event.type === "final") {
       setTraceId(event.trace_id ?? "");
       setViz(event.viz ?? null);

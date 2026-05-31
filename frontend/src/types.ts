@@ -45,13 +45,12 @@ export interface VizData {
 }
 
 export interface WorkflowEvent {
-  type: "step_start" | "step_end" | "answer_delta" | "final" | "error";
+  type: "step_start" | "step_end" | "final" | "error";
   step?: string;
   status?: StepStatus;
   latency_ms?: number;
   error?: string | null;
   fallback_used?: boolean;
-  delta?: string;
   answer?: string;
   trace_id?: string;
   viz?: VizData | null;

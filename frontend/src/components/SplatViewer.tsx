@@ -297,6 +297,11 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
         return;
       }
 
+      // Only respond to primary (left) button to avoid right-click/middle-click drag
+      if (event.button !== 0) {
+        return;
+      }
+
       orbitDragRef.current = {
         pointerId: event.pointerId,
         x: event.clientX,

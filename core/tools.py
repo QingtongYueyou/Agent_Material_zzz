@@ -100,7 +100,7 @@ def search_materials_by_criteria_raw(
     is_stable: bool | None = None,
     crystal_system: str | None = None,
     max_results: int = 10,
-) -> str:
+) -> dict:
     """
     根据筛选条件搜索材料列表。
 
@@ -111,15 +111,19 @@ def search_materials_by_criteria_raw(
         is_stable: 是否仅搜索稳定材料。
         crystal_system: 晶系。
         max_results: 最大结果数。
+
+    返回:
+        {"ok": true, "data": [...]} 或 {"ok": false, "error": "..."}
     """
     if MP_API_KEY is None:
-        return "Error: MP_API_KEY 未设置。"
+        return {"ok": False, "error": "MP_API_KEY 未设置，请在环境变量中配置 Materials Project 的 API key。"}
 
     with MPRester(MP_API_KEY) as mpr:
         try:
+            chunk_size = min(max(max_results, 20), 1000)
             search_kwargs = {
                 "num_chunks": 1,
-                "chunk_size": 1000,
+                "chunk_size": chunk_size,
                 "fields": [
                     "material_id",
                     "formula_pretty",
@@ -144,7 +148,7 @@ def search_materials_by_criteria_raw(
             results = mpr.materials.summary.search(**search_kwargs)
 
             if not results:
-                return "未找到符合条件的材料，请尝试放宽筛选条件。"
+                return {"ok": True, "data": [], "note": "未找到符合条件的材料，请尝试放宽筛选条件。"}
 
             data_list = []
             for doc in results[:max_results]:
@@ -158,14 +162,14 @@ def search_materials_by_criteria_raw(
                 }
                 data_list.append(item)
 
-            return json.dumps(data_list, ensure_ascii=False)
+            return {"ok": True, "data": data_list}
 
         except TypeError as te:
             if "default_factory" in str(te):
-                return "系统错误：库版本冲突。请尝试升级 mp-api 或使用当前的兼容模式代码。"
-            return f"参数类型错误: {str(te)}"
+                return {"ok": False, "error": "系统错误：库版本冲突。请尝试升级 mp-api 或使用当前的兼容模式代码。"}
+            return {"ok": False, "error": f"参数类型错误: {str(te)}"}
         except Exception as e:
-            return f"搜索 API 调用出错: {str(e)}"
+            return {"ok": False, "error": f"搜索 API 调用出错: {str(e)}"}
 
 
 @tool(show_result=False)

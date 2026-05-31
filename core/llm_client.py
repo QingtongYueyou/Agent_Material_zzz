@@ -5,16 +5,16 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from config.settings import LLM_MODEL_ID, LLM_TIMEOUT_SEC, POE_API_BASE_URL, POE_API_KEY
+from config.settings import (
+    DEEPSEEK_API_BASE_URL,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_MODEL_ID,
+    LLM_TIMEOUT_SEC,
+)
 
 
 class LLMClientError(RuntimeError):
     pass
-
-
-def _chat_completions_url() -> str:
-    base = POE_API_BASE_URL.rstrip("/")
-    return f"{base}/chat/completions"
 
 
 def create_chat_completion(
@@ -27,11 +27,11 @@ def create_chat_completion(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if not POE_API_KEY:
-        raise LLMClientError("未配置 POE_API_KEY，无法调用大模型服务。")
+    if not DEEPSEEK_API_KEY:
+        raise LLMClientError("未配置 DEEPSEEK_API_KEY，无法调用大模型服务。")
 
     payload: dict[str, Any] = {
-        "model": model or LLM_MODEL_ID,
+        "model": model or DEEPSEEK_MODEL_ID,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -41,11 +41,13 @@ def create_chat_completion(
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
 
+    api_base = DEEPSEEK_API_BASE_URL.rstrip("/")
+    url = f"{api_base}/chat/completions"
     req = urllib.request.Request(
-        _chat_completions_url(),
+        url,
         data=json.dumps(payload).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {POE_API_KEY}",
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
             "Content-Type": "application/json",
         },
         method="POST",

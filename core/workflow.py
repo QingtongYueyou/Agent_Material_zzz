@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from collections.abc import Generator
@@ -110,6 +111,12 @@ def _tool_result_to_content(result: Any) -> str:
     if isinstance(result, str):
         return result
     if isinstance(result, dict):
+        # For search results with ok/data shape, serialize the data for the LLM
+        if "ok" in result and "data" in result:
+            if result.get("ok") and result["data"]:
+                return json.dumps(result["data"], ensure_ascii=False)
+            note = result.get("note") or result.get("error") or "无结果"
+            return note
         sanitized = dict(result)
         sanitized.pop("cif", None)
         return json.dumps(sanitized, ensure_ascii=False)
@@ -118,6 +125,11 @@ def _tool_result_to_content(result: Any) -> str:
 
 def _tool_result_for_context(result: Any) -> Any:
     if isinstance(result, dict):
+        # For search results with ok/data shape, unwrap for the LLM context
+        if "ok" in result:
+            if result.get("ok") and result.get("data"):
+                return {"results": result["data"]}
+            return {"note": result.get("note") or result.get("error") or "无结果"}
         sanitized = dict(result)
         sanitized.pop("cif", None)
         return sanitized
@@ -127,13 +139,18 @@ def _tool_result_for_context(result: Any) -> Any:
 def _update_context_from_tool(ctx: WorkflowContext, tool_name: str, result: Any) -> None:
     if tool_name == "search_materials_by_criteria":
         items: list[dict[str, Any]] = []
-        if isinstance(result, str) and result.strip().startswith("["):
+        if isinstance(result, dict):
+            if not result.get("ok", False):
+                pass  # error — items stays empty
+            elif isinstance(result.get("data"), list):
+                items = result["data"]
+        elif isinstance(result, str) and result.strip().startswith("["):
             try:
                 parsed = json.loads(result)
                 if isinstance(parsed, list):
                     items = [row for row in parsed if isinstance(row, dict)]
             except Exception:
-                items = []
+                pass
         ctx.retrieval_result = {"items": items}
         return
 
@@ -192,6 +209,31 @@ def _fallback_answer(ctx: WorkflowContext) -> str:
     return "没有得到可用的工具结果，请提供更明确的 MP-ID、化学式或筛选条件。"
 
 
+def _validate_answer_against_facts(answer: str, ctx: WorkflowContext) -> bool:
+    """Check that the LLM answer includes the correct formula and mp_id from the structure result."""
+    structure = ctx.structure_result or {}
+    formula = str(structure.get("formula") or "").strip()
+    mp_id = str(structure.get("mp_id") or "").strip().lower()
+
+    if not formula and not mp_id:
+        return True  # no known facts to check against
+
+    lower_answer = answer.lower()
+
+    if formula and formula.lower() not in lower_answer:
+        return False
+    if mp_id and mp_id not in lower_answer:
+        return False
+
+    # Reject if the answer mentions any extra mp-ids that don't match the known one
+    if mp_id:
+        all_mp_ids = set(re.findall(r"\bmp-\d+\b", lower_answer))
+        if all_mp_ids and all_mp_ids != {mp_id}:
+            return False
+
+    return True
+
+
 def _final_answer_from_context(ctx: WorkflowContext) -> str | None:
     facts: dict[str, Any] = {
         "question": ctx.question,
@@ -233,6 +275,10 @@ def _final_answer_from_context(ctx: WorkflowContext) -> str | None:
     answer = _normalize_content(message.get("content"))
     if not answer:
         return None
+
+    if not _validate_answer_against_facts(answer, ctx):
+        return None  # caller falls back to _fallback_answer
+
     return answer
 
 
@@ -282,13 +328,13 @@ class WorkflowOrchestrator:
                 break
 
             tool_calls = assistant_message.get("tool_calls") or []
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": assistant_message.get("content"),
-                    "tool_calls": tool_calls or None,
-                }
-            )
+            assistant_msg: dict[str, Any] = {
+                "role": "assistant",
+                "content": assistant_message.get("content"),
+            }
+            if tool_calls:
+                assistant_msg["tool_calls"] = tool_calls
+            messages.append(assistant_msg)
 
             if tool_calls:
                 result = _done(
@@ -353,6 +399,8 @@ class WorkflowOrchestrator:
                 if error_message:
                     if fn == "get_mp_structure":
                         code = ErrorCode.CIF_PARSE_FAILED
+                    elif fn == "search_materials_by_criteria":
+                        code = ErrorCode.MP_API_EMPTY_RESULT
                     else:
                         code = ErrorCode.MP_API_EMPTY_RESULT
                     tool_result = _fail(fn, tool_t0, code, str(error_message), {"arguments": arguments})
