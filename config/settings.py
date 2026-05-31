@@ -72,6 +72,16 @@ MCP_API_KEY = os.getenv("MCP_API_KEY", "")
 MCP_TIMEOUT_SEC = int(os.getenv("MCP_TIMEOUT_SEC", "60"))
 MCP_RENDER_TTL_SEC = int(os.getenv("MCP_RENDER_TTL_SEC", "600"))
 MCP_REFRESH_SKEW_SEC = int(os.getenv("MCP_REFRESH_SKEW_SEC", "30"))
+THREEDGS_MCP_ENABLED = (os.getenv("THREEDGS_MCP_ENABLED", "true") or "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+THREEDGS_MCP_SERVER_URL = os.getenv("THREEDGS_MCP_SERVER_URL", "http://127.0.0.1:8090/mcp")
+THREEDGS_MCP_API_KEY = os.getenv("THREEDGS_MCP_API_KEY", "")
+THREEDGS_PUBLIC_BASE_URL = os.getenv("THREEDGS_PUBLIC_BASE_URL", "http://127.0.0.1:8090").rstrip("/")
+THREEDGS_RENDER_TTL_SEC = int(os.getenv("THREEDGS_RENDER_TTL_SEC", "600"))
 
 
 def _resolve_spark_root() -> Path:

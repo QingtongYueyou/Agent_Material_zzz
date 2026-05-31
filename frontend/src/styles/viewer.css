@@ -116,6 +116,12 @@
   overflow: hidden;
 }
 
+.three-dgs-mcp-shell {
+  background:
+    radial-gradient(circle at 50% 38%, rgba(24, 182, 166, 0.16), transparent 32%),
+    #0d1320;
+}
+
 .splat-shell iframe,
 .mcp-shell iframe {
   display: block;

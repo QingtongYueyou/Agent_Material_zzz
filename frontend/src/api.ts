@@ -1,4 +1,12 @@
-import type { AssetPipelineStatus, HealthResponse, McpRenderResponse, SplatAsset, VizData, WorkflowEvent } from "./types";
+import type {
+  AssetPipelineStatus,
+  HealthResponse,
+  McpRenderResponse,
+  SplatAsset,
+  ThreeDgsRenderResponse,
+  VizData,
+  WorkflowEvent,
+} from "./types";
 
 const configuredBase = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
 
@@ -115,6 +123,25 @@ export async function renderMcp(cifPath: string): Promise<McpRenderResponse> {
       detail = await response.text();
     }
     throw new Error(detail || `MCP render failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function renderThreeDgs(filename: string, quality?: string): Promise<ThreeDgsRenderResponse> {
+  const response = await fetch(apiUrl("/api/3dgs/render"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename, quality })
+  });
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const payload = await response.json();
+      detail = String(payload.detail ?? "");
+    } catch {
+      detail = await response.text();
+    }
+    throw new Error(detail || `3DGS render failed: ${response.status}`);
   }
   return response.json();
 }

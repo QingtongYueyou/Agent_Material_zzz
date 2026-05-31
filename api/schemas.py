@@ -13,5 +13,10 @@ class McpRenderRequest(BaseModel):
     cif_path: str = Field(..., min_length=1)
 
 
+class ThreeDGSRenderRequest(BaseModel):
+    filename: str = Field(..., min_length=1)
+    quality: str = "auto"
+
+
 class MetricRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)

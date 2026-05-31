@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from importlib import import_module
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.schemas import ChatRequest, McpRenderRequest, MetricRequest
+from api.schemas import ChatRequest, McpRenderRequest, MetricRequest, ThreeDGSRenderRequest
 from api.serialization import serialize_workflow_event
 from config.settings import (
     BASE_DIR,
@@ -20,6 +21,9 @@ from config.settings import (
     MCP_ENABLED,
     MCP_REFRESH_SKEW_SEC,
     STATIC_DIR,
+    THREEDGS_MCP_ENABLED,
+    THREEDGS_MCP_SERVER_URL,
+    THREEDGS_RENDER_TTL_SEC,
 )
 from core.mcp_client import MCPClientError, process_file
 from core.perf_metrics import append_interaction_metric, append_render_metric
@@ -27,6 +31,10 @@ from core.spark_asset_ingest import ensure_auto_ingest_started, get_auto_ingest_
 from core.splat_assets import resolve_splat_asset
 from core.workflow import WorkflowOrchestrator
 
+
+_3dgs_mcp_client = import_module("core.3dgs_mcp_client")
+ThreeDGSMCPClientError = _3dgs_mcp_client.ThreeDGSMCPClientError
+create_3dgs_render = _3dgs_mcp_client.create_render
 
 app = FastAPI(
     title="Agent Material Backend",
@@ -75,6 +83,11 @@ def health() -> dict[str, Any]:
         "mcp": {
             "enabled": MCP_ENABLED,
             "refresh_skew_sec": MCP_REFRESH_SKEW_SEC,
+        },
+        "3dgs_mcp": {
+            "enabled": THREEDGS_MCP_ENABLED,
+            "server_url": THREEDGS_MCP_SERVER_URL,
+            "ttl_sec": THREEDGS_RENDER_TTL_SEC,
         },
     }
 
@@ -225,6 +238,17 @@ def mcp_render(request: McpRenderRequest) -> dict[str, Any]:
     try:
         return process_file(path)
     except MCPClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/3dgs/render")
+def three_dgs_render(request: ThreeDGSRenderRequest) -> dict[str, Any]:
+    if not THREEDGS_MCP_ENABLED:
+        raise HTTPException(status_code=503, detail="3DGS MCP rendering is disabled.")
+
+    try:
+        return create_3dgs_render(request.filename, quality=request.quality)
+    except ThreeDGSMCPClientError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 

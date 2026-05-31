@@ -80,6 +80,17 @@ export interface McpRenderResponse {
   filename?: string;
 }
 
+export interface ThreeDgsRenderResponse {
+  ok: boolean;
+  source: "3dgs:mcp";
+  session_id: string;
+  render_url: string;
+  created_at: number;
+  expires_at: number;
+  ttl_sec: number;
+  asset: SplatAsset;
+}
+
 export interface AssetPipelineStatus {
   enabled?: boolean;
   running?: boolean;
