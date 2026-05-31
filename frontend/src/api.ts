@@ -70,7 +70,11 @@ function parseSseBlock(block: string, onEvent: (event: WorkflowEvent) => void): 
   if (!data) {
     return;
   }
-  onEvent(JSON.parse(data) as WorkflowEvent);
+  try {
+    onEvent(JSON.parse(data) as WorkflowEvent);
+  } catch (err) {
+    console.error("Failed to parse SSE event", err, data);
+  }
 }
 
 export async function resolveSplatAsset(filename: string, quality: string): Promise<SplatAsset> {

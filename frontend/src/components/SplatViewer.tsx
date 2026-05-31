@@ -4,32 +4,17 @@ import * as THREE from "three";
 import { SparkControls, SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import { absoluteApiUrl, resolveSplatAsset } from "../api";
 import type { SplatAsset, VizData } from "../types";
+import { useSplatMetrics, type SplatRenderEventType } from "../hooks/useSplatMetrics";
+import {
+  fitCameraToMesh,
+  isPointerInsideModelFocus,
+  type OrbitDrag,
+} from "../utils/splatCamera";
 
 interface SplatViewerProps {
   viz: VizData | null;
   quality: string;
   refreshKey?: number;
-}
-
-interface CameraSnapshot {
-  position: number[];
-  quaternion: number[];
-}
-
-interface PendingInteraction {
-  interactionType: "rotate_or_pan" | "zoom";
-  eventType: "pointerdown" | "wheel";
-  startTs: number;
-  baseline: CameraSnapshot | null;
-  recorded: boolean;
-}
-
-interface OrbitDrag {
-  pointerId: number;
-  x: number;
-  y: number;
-  offset: THREE.Vector3;
-  target: THREE.Vector3;
 }
 
 interface ViewerState {
@@ -43,26 +28,31 @@ interface ViewerState {
   onResize: () => void;
   sceneReadyTs: number | null;
   firstFrameRecorded: boolean;
-  eventType: "auto_initial" | "manual_retest";
+  eventType: SplatRenderEventType;
   clickTs: number;
   requestStartTs: number;
   runId: number;
 }
 
-const initialSummary = [
-  "Engine: Spark 2.0",
-  "Drag to rotate, wheel to move.",
-];
-
 export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<ViewerState | null>(null);
-  const pendingInteractionRef = useRef<PendingInteraction | null>(null);
-  const interactionEnabledRef = useRef(false);
   const orbitDragRef = useRef<OrbitDrag | null>(null);
   const runCounterRef = useRef(0);
-  const pendingEventTypeRef = useRef<"auto_initial" | "manual_retest">("auto_initial");
+  const pendingEventTypeRef = useRef<SplatRenderEventType>("auto_initial");
   const pendingClickTsRef = useRef(0);
+  const {
+    fps,
+    summary,
+    resetFps,
+    resetMetrics,
+    setInteractionEnabled,
+    updateFps,
+    showAssetStatus,
+    armInteractionMeasurement,
+    maybeRecordInteraction,
+    recordRenderFirstFrame,
+  } = useSplatMetrics();
 
   const [asset, setAsset] = useState<SplatAsset | null>(null);
   const [assetError, setAssetError] = useState("");
@@ -70,9 +60,7 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
   const [viewerError, setViewerError] = useState("");
   const [progressText, setProgressText] = useState("Loading...");
   const [viewerLoading, setViewerLoading] = useState(false);
-  const [fps, setFps] = useState<number | null>(null);
   const [metricsOpen, setMetricsOpen] = useState(false);
-  const [summary, setSummary] = useState<string[]>(initialSummary);
   const [runToken, setRunToken] = useState(0);
 
   useEffect(() => {
@@ -80,8 +68,7 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
     setAsset(null);
     setAssetError("");
     setViewerError("");
-    setFps(null);
-    setSummary(initialSummary);
+    resetMetrics();
 
     if (!viz?.filename) {
       return;
@@ -108,11 +95,11 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
     return () => {
       cancelled = true;
     };
-  }, [quality, refreshKey, viz?.filename]);
+  }, [quality, refreshKey, resetMetrics, viz?.filename]);
 
   useEffect(() => {
-    interactionEnabledRef.current = metricsOpen;
-  }, [metricsOpen]);
+    setInteractionEnabled(metricsOpen);
+  }, [metricsOpen, setInteractionEnabled]);
 
   useEffect(() => {
     if (!asset || !containerRef.current) {
@@ -122,180 +109,6 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
     const currentAsset = asset;
     const container = containerRef.current;
     let disposed = false;
-    let frameCount = 0;
-    let lastFpsTs = performance.now();
-
-    function updateSummary(lines: string[]) {
-      setSummary(lines);
-    }
-
-    function postMetrics(path: "/api/metrics/render" | "/api/metrics/interaction", record: Record<string, unknown>) {
-      fetch(absoluteApiUrl(path), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payload: record }),
-        keepalive: true,
-      }).catch(() => undefined);
-    }
-
-    function cameraSnapshot(camera: THREE.Camera | null): CameraSnapshot | null {
-      if (!camera) {
-        return null;
-      }
-      return {
-        position: [camera.position.x, camera.position.y, camera.position.z],
-        quaternion: [camera.quaternion.x, camera.quaternion.y, camera.quaternion.z, camera.quaternion.w],
-      };
-    }
-
-    function hasCameraChanged(before: CameraSnapshot | null, after: CameraSnapshot | null): boolean {
-      if (!before || !after) {
-        return false;
-      }
-
-      const valuesBefore = before.position.concat(before.quaternion);
-      const valuesAfter = after.position.concat(after.quaternion);
-      return valuesBefore.some((value, index) => Math.abs(value - valuesAfter[index]) > 1e-4);
-    }
-
-    function armInteractionMeasurement(
-      camera: THREE.Camera,
-      interactionType: PendingInteraction["interactionType"],
-      eventType: PendingInteraction["eventType"],
-    ) {
-      if (!interactionEnabledRef.current) {
-        return;
-      }
-
-      pendingInteractionRef.current = {
-        interactionType,
-        eventType,
-        startTs: performance.now(),
-        baseline: cameraSnapshot(camera),
-        recorded: false,
-      };
-
-      updateSummary([
-        "Engine: Spark 2.0",
-        `Asset: ${currentAsset.asset_id}`,
-        `Model: ${currentAsset.model_name}`,
-        `Variant: ${currentAsset.variant_name || "default"}`,
-        `Mode: ${currentAsset.lod_mode_label}`,
-        `Interaction: ${interactionType}`,
-        "Status: waiting for camera movement...",
-      ]);
-    }
-
-    function maybeRecordInteraction(camera: THREE.Camera) {
-      const pending = pendingInteractionRef.current;
-      if (!pending || pending.recorded) {
-        return;
-      }
-
-      const current = cameraSnapshot(camera);
-      if (!hasCameraChanged(pending.baseline, current)) {
-        return;
-      }
-
-      const latencyMs = Number((performance.now() - pending.startTs).toFixed(3));
-      pending.recorded = true;
-
-      const metric = {
-        event_type: pending.eventType,
-        model_name: currentAsset.model_name,
-        model_format: currentAsset.model_format,
-        vertex_count: currentAsset.vertex_count,
-        file_size_bytes: currentAsset.file_size_bytes,
-        interaction_type: pending.interactionType,
-        input_to_camera_change_ms: latencyMs,
-        viewport_width: window.innerWidth,
-        viewport_height: window.innerHeight,
-        user_agent: navigator.userAgent,
-      };
-
-      postMetrics("/api/metrics/interaction", metric);
-      updateSummary([
-        "Engine: Spark 2.0",
-        `Asset: ${currentAsset.asset_id}`,
-        `Model: ${currentAsset.model_name}`,
-        `Variant: ${currentAsset.variant_name || "default"}`,
-        `Mode: ${currentAsset.lod_mode_label}`,
-        `Interaction: ${pending.interactionType}`,
-        `input->camera change: ${latencyMs} ms`,
-      ]);
-    }
-
-    function updateFps() {
-      const now = performance.now();
-      frameCount += 1;
-
-      if (now - lastFpsTs < 500) {
-        return;
-      }
-
-      setFps(Math.round((frameCount * 1000) / (now - lastFpsTs)));
-      frameCount = 0;
-      lastFpsTs = now;
-    }
-
-    function applyCenteredCamera(camera: THREE.PerspectiveCamera, center: THREE.Vector3, radius: number) {
-      const vFov = THREE.MathUtils.degToRad(camera.fov);
-      const hFov = 2 * Math.atan(Math.tan(vFov / 2) * Math.max(camera.aspect, 1));
-      const fitDistance = Math.max(radius / Math.sin(vFov / 2), radius / Math.sin(hFov / 2));
-      const distance = Math.max(fitDistance * 1.35, 3.2);
-      const viewDir = new THREE.Vector3(0.5, 0.35, 1).normalize();
-
-      camera.zoom = 1;
-      camera.position.copy(center).addScaledVector(viewDir, distance);
-      camera.near = Math.max(distance / 500, 0.01);
-      camera.far = Math.max(distance * 20, 100);
-      camera.lookAt(center);
-      camera.updateProjectionMatrix();
-      camera.updateMatrixWorld(true);
-      viewerRef.current?.target.copy(center);
-    }
-
-    function fitCameraToMesh(mesh: SplatMesh, camera: THREE.PerspectiveCamera, onDone: () => void, retries = 0) {
-      try {
-        const bounds = currentAsset.view_bounds;
-        if (
-          bounds &&
-          Array.isArray(bounds.center) &&
-          bounds.center.length === 3 &&
-          Number.isFinite(bounds.radius) &&
-          Number(bounds.radius) > 0
-        ) {
-          applyCenteredCamera(
-            camera,
-            new THREE.Vector3(bounds.center[0] ?? 0, bounds.center[1] ?? 0, bounds.center[2] ?? 0),
-            Number(bounds.radius),
-          );
-          onDone();
-          return;
-        }
-
-        mesh.updateMatrixWorld(true);
-        const maybeMesh = mesh as unknown as {
-          getBoundingBox: (precise?: boolean) => THREE.Box3;
-          matrixWorld: THREE.Matrix4;
-        };
-        const box = maybeMesh.getBoundingBox(false);
-        const sphere = new THREE.Sphere();
-        box.getBoundingSphere(sphere);
-
-        const radius = Math.max(sphere.radius, 0.75);
-        const center = sphere.center.clone().applyMatrix4(maybeMesh.matrixWorld);
-        applyCenteredCamera(camera, center, radius);
-        onDone();
-      } catch (err) {
-        if (retries < 60) {
-          window.setTimeout(() => fitCameraToMesh(mesh, camera, onDone, retries + 1), 250);
-          return;
-        }
-        applyCenteredCamera(camera, new THREE.Vector3(0, 0, 0), 2.5);
-        onDone();
-      }
-    }
 
     function disposeCurrentViewer() {
       const viewer = viewerRef.current;
@@ -402,39 +215,21 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
 
         if (viewer.sceneReadyTs !== null && !viewer.firstFrameRecorded) {
           const firstFrameTs = performance.now();
-          const metric = {
-            event_type: viewer.eventType,
-            model_name: currentAsset.model_name,
-            model_format: currentAsset.model_format,
-            vertex_count: currentAsset.vertex_count,
-            file_size_bytes: currentAsset.file_size_bytes,
-            click_to_request_start_ms: Number((viewer.requestStartTs - viewer.clickTs).toFixed(3)),
-            request_start_to_scene_ready_ms: Number((viewer.sceneReadyTs - viewer.requestStartTs).toFixed(3)),
-            scene_ready_to_first_frame_ms: Number((firstFrameTs - viewer.sceneReadyTs).toFixed(3)),
-            click_to_first_frame_ms: Number((firstFrameTs - viewer.clickTs).toFixed(3)),
-            viewport_width: window.innerWidth,
-            viewport_height: window.innerHeight,
-            user_agent: navigator.userAgent,
-          };
-
           viewer.firstFrameRecorded = true;
           setViewerLoading(false);
           setViewerError("");
-          postMetrics("/api/metrics/render", metric);
-          updateSummary([
-            "Engine: Spark 2.0",
-            `Asset: ${currentAsset.asset_id}`,
-            `Model: ${currentAsset.model_name}`,
-            `Variant: ${currentAsset.variant_name || "default"}`,
-            `Mode: ${currentAsset.lod_mode_label}`,
-            `Event: ${viewer.eventType} #${viewer.runId}`,
-            `click->first frame: ${metric.click_to_first_frame_ms} ms`,
-            `request->ready: ${metric.request_start_to_scene_ready_ms} ms`,
-            `ready->frame: ${metric.scene_ready_to_first_frame_ms} ms`,
-          ]);
+          recordRenderFirstFrame({
+            asset: currentAsset,
+            eventType: viewer.eventType,
+            runId: viewer.runId,
+            clickTs: viewer.clickTs,
+            requestStartTs: viewer.requestStartTs,
+            sceneReadyTs: viewer.sceneReadyTs,
+            firstFrameTs,
+          });
         }
 
-        maybeRecordInteraction(camera);
+        maybeRecordInteraction(camera, currentAsset);
       });
 
       return viewer;
@@ -447,21 +242,12 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
 
       disposeCurrentViewer();
       const viewer = createViewer(eventType, clickTs, requestStartTs);
-      pendingInteractionRef.current = null;
       orbitDragRef.current = null;
       setViewerLoading(true);
       setViewerError("");
       setProgressText("Loading...");
-      setFps(null);
-
-      updateSummary([
-        "Engine: Spark 2.0",
-        `Asset: ${currentAsset.asset_id}`,
-        `Model: ${currentAsset.model_name}`,
-        `Variant: ${currentAsset.variant_name || "default"}`,
-        `Mode: ${currentAsset.lod_mode_label}`,
-        "Status: loading viewer...",
-      ]);
+      resetFps();
+      showAssetStatus(currentAsset, "loading viewer...");
 
       const mesh = new SplatMesh({
         url: absoluteApiUrl(currentAsset.model_url),
@@ -490,7 +276,7 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
           }
 
           setProgressText("Preparing first frame...");
-          fitCameraToMesh(loadedMesh, viewer.camera, () => {
+          fitCameraToMesh(loadedMesh, viewer.camera, currentAsset, viewer.target, () => {
             viewer.sceneReadyTs = performance.now();
           });
         })
@@ -501,14 +287,7 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
           setViewerLoading(false);
           setViewerError(err instanceof Error ? err.message : "Splat load failed. Check Console.");
           setProgressText("Error: Check Console");
-          updateSummary([
-            "Engine: Spark 2.0",
-            `Asset: ${currentAsset.asset_id}`,
-            `Model: ${currentAsset.model_name}`,
-            `Variant: ${currentAsset.variant_name || "default"}`,
-            `Mode: ${currentAsset.lod_mode_label}`,
-            "Status: load failed, check browser console",
-          ]);
+          showAssetStatus(currentAsset, "load failed, check browser console");
         });
     }
 
@@ -526,7 +305,7 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
         target: viewer.target.clone(),
       };
       container.setPointerCapture?.(event.pointerId);
-      armInteractionMeasurement(viewer.camera, "rotate_or_pan", "pointerdown");
+      armInteractionMeasurement(viewer.camera, currentAsset, "rotate_or_pan", "pointerdown");
     }
 
     function handlePointerMove(event: PointerEvent) {
@@ -569,7 +348,13 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
         return;
       }
 
-      const overModel = isPointerInsideModelFocus(event, viewer.camera, currentAsset, viewer.renderer.domElement);
+      const overModel = isPointerInsideModelFocus(
+        event,
+        viewer.camera,
+        currentAsset,
+        viewer.renderer.domElement,
+        viewer.target,
+      );
       const scrollHost = container.closest(".visual-workspace") as HTMLElement | null;
       if (!overModel && scrollHost && scrollHost.scrollHeight > scrollHost.clientHeight + 1) {
         const canScrollDown = event.deltaY > 0 && scrollHost.scrollTop + scrollHost.clientHeight < scrollHost.scrollHeight - 1;
@@ -595,54 +380,7 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
       camera.position.copy(target).add(offset);
       camera.lookAt(target);
       camera.updateProjectionMatrix();
-      armInteractionMeasurement(camera, "zoom", "wheel");
-    }
-
-    function isPointerInsideModelFocus(
-      event: WheelEvent,
-      camera: THREE.PerspectiveCamera,
-      currentAsset: SplatAsset,
-      canvas: HTMLCanvasElement,
-    ): boolean {
-      const rect = canvas.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) {
-        return false;
-      }
-
-      const bounds = currentAsset.view_bounds;
-      const center = Array.isArray(bounds?.center) && bounds.center.length === 3
-        ? new THREE.Vector3(bounds.center[0] ?? 0, bounds.center[1] ?? 0, bounds.center[2] ?? 0)
-        : viewerRef.current?.target.clone() ?? new THREE.Vector3(0, 0, 0);
-      const radius = Number.isFinite(bounds?.radius) && Number(bounds?.radius) > 0
-        ? Number(bounds?.radius)
-        : 1;
-      const pointerX = event.clientX - rect.left;
-      const pointerY = event.clientY - rect.top;
-      const projectedCenter = center.clone().project(camera);
-
-      if (projectedCenter.z < -1 || projectedCenter.z > 1) {
-        return false;
-      }
-
-      const centerX = ((projectedCenter.x + 1) / 2) * rect.width;
-      const centerY = ((1 - projectedCenter.y) / 2) * rect.height;
-      const axes = [
-        new THREE.Vector3(radius, 0, 0),
-        new THREE.Vector3(-radius, 0, 0),
-        new THREE.Vector3(0, radius, 0),
-        new THREE.Vector3(0, -radius, 0),
-        new THREE.Vector3(0, 0, radius),
-        new THREE.Vector3(0, 0, -radius),
-      ];
-      const projectedRadius = axes.reduce((max, axis) => {
-        const point = center.clone().add(axis).project(camera);
-        const x = ((point.x + 1) / 2) * rect.width;
-        const y = ((1 - point.y) / 2) * rect.height;
-        return Math.max(max, Math.hypot(x - centerX, y - centerY));
-      }, 0);
-      const focusRadius = Math.max(72, projectedRadius * 1.22);
-
-      return Math.hypot(pointerX - centerX, pointerY - centerY) <= focusRadius;
+      armInteractionMeasurement(camera, currentAsset, "zoom", "wheel");
     }
 
     container.addEventListener("pointerdown", handlePointerDown);
@@ -666,7 +404,16 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
       container.removeEventListener("wheel", handleWheel);
       disposeCurrentViewer();
     };
-  }, [asset, runToken]);
+  }, [
+    armInteractionMeasurement,
+    asset,
+    maybeRecordInteraction,
+    recordRenderFirstFrame,
+    resetFps,
+    runToken,
+    showAssetStatus,
+    updateFps,
+  ]);
 
   function retestRender() {
     pendingEventTypeRef.current = "manual_retest";

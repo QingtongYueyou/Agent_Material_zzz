@@ -1,38 +1,48 @@
 from __future__ import annotations
 
 import glob
+import logging
 import os
+from functools import lru_cache
 
 import pandas as pd
 
 from config.settings import BASE_DIR, CIF_DIR
 
 try:
-    from pymatgen.core import Structure
     from pymatgen.analysis.diffraction.xrd import XRDCalculator
+    from pymatgen.core import Structure
 
     HAS_PYMATGEN = True
 except ImportError:
     HAS_PYMATGEN = False
 
 CURRENT_SCRIPT_DIR = str(BASE_DIR)
+logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=32)
+def _load_structure(cif_path: str, mtime_ns: int, size: int):
+    return Structure.from_file(cif_path)
 
 
 def get_cif_info(cif_file: str | os.PathLike):
     """
-    解析指定 CIF 文件，返回用于绘图的 DataFrame。
+    Parse a CIF file and return DataFrames used by the visualization layer.
     """
     if not HAS_PYMATGEN:
         return None, None, None, None
 
     cif_path = str(cif_file)
-    if not os.path.exists(cif_path):
+    try:
+        stat = os.stat(cif_path)
+    except OSError:
         return None, None, None, None
 
     filename = os.path.basename(cif_path)
 
     try:
-        structure = Structure.from_file(cif_path)
+        structure = _load_structure(cif_path, stat.st_mtime_ns, stat.st_size)
     except Exception:
         return None, None, None, None
 
@@ -41,7 +51,7 @@ def get_cif_info(cif_file: str | os.PathLike):
         {
             "Parameter": ["a", "b", "c"],
             "Value": [lattice.a, lattice.b, lattice.c],
-            "Unit": ["Å", "Å", "Å"],
+            "Unit": ["Angstrom", "Angstrom", "Angstrom"],
         }
     )
 
@@ -76,27 +86,26 @@ def get_cif_info(cif_file: str | os.PathLike):
 
 def get_latest_cif_info(cif_dir: str | os.PathLike = CIF_DIR):
     """
-    获取目录下最新的 CIF 文件，解析结构并返回用于绘图的 DataFrame。
+    Parse the newest CIF file in a directory for visualization.
     """
     cif_dir_str = str(cif_dir)
-    print("-" * 50)
-    print(f"DEBUG: 脚本所在位置: {CURRENT_SCRIPT_DIR}")
-    print(f"DEBUG: 正在扫描目标: {cif_dir_str}")
+    logger.debug("Script directory: %s", CURRENT_SCRIPT_DIR)
+    logger.debug("Scanning CIF directory: %s", cif_dir_str)
 
     if not HAS_PYMATGEN:
-        print("DEBUG: 缺少 pymatgen")
+        logger.debug("pymatgen is unavailable; skipping CIF parsing.")
         return None, None, None, None
 
     search_pattern = os.path.join(cif_dir_str, "*.cif")
     list_of_files = glob.glob(search_pattern)
 
-    print(f"DEBUG: 找到文件数量: {len(list_of_files)}")
+    logger.debug("Found CIF file count: %s", len(list_of_files))
 
     if not list_of_files:
         return None, None, None, None
 
     latest_file = max(list_of_files, key=os.path.getctime)
     filename = os.path.basename(latest_file)
-    print(f"DEBUG: 成功锁定最新文件: {filename}")
+    logger.debug("Selected newest CIF file: %s", filename)
 
     return get_cif_info(latest_file)

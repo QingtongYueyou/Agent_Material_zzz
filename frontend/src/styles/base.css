@@ -1,0 +1,56 @@
+﻿:root {
+  color-scheme: light;
+  --ink: #08133f;
+  --text: #152458;
+  --muted: #6a75a5;
+  --soft: #f6f8ff;
+  --panel: rgba(255, 255, 255, 0.86);
+  --panel-strong: rgba(255, 255, 255, 0.96);
+  --line: #dfe5ff;
+  --line-strong: #cbd5ff;
+  --blue: #2448ff;
+  --blue-2: #4266ff;
+  --purple: #7133f4;
+  --cyan: #12d9c8;
+  --danger: #e25d70;
+  --shadow: 0 18px 48px rgba(58, 74, 143, 0.16);
+  --inner-shadow: 0 14px 38px rgba(71, 89, 152, 0.11);
+  font-family: "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background:
+    linear-gradient(90deg, rgba(99, 122, 207, 0.055) 1px, transparent 1px),
+    linear-gradient(180deg, #fbfcff 0%, #f4f7ff 46%, #eef4ff 100%);
+  background-size: 32px 32px, auto;
+  overflow-x: hidden;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  border: 0;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+

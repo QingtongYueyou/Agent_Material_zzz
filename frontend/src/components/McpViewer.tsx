@@ -3,7 +3,36 @@ import { ExternalLink } from "lucide-react";
 import { getHealth, renderMcp } from "../api";
 import type { McpRenderResponse, VizData } from "../types";
 
+const MCP_CACHE_LIMIT = 12;
 const mcpCache = new Map<string, McpRenderResponse>();
+const evictedMcpKeys = new Set<string>();
+
+function getCachedMcp(cifPath: string): McpRenderResponse | null {
+  const entry = mcpCache.get(cifPath);
+  if (!entry) {
+    return null;
+  }
+  mcpCache.delete(cifPath);
+  mcpCache.set(cifPath, entry);
+  return entry;
+}
+
+function setCachedMcp(cifPath: string, entry: McpRenderResponse): void {
+  if (mcpCache.has(cifPath)) {
+    mcpCache.delete(cifPath);
+  }
+  evictedMcpKeys.delete(cifPath);
+  mcpCache.set(cifPath, entry);
+
+  while (mcpCache.size > MCP_CACHE_LIMIT) {
+    const oldestKey = mcpCache.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    mcpCache.delete(oldestKey);
+    evictedMcpKeys.add(oldestKey);
+  }
+}
 
 function isFresh(entry: McpRenderResponse | null, skewSec: number): boolean {
   if (!entry?.ok || typeof entry.expires_at !== "number") {
@@ -65,7 +94,7 @@ export function McpViewer({ viz, refreshKey = 0 }: { viz: VizData | null; refres
       setError("");
       try {
         const payload = await renderMcp(cifPath);
-        mcpCache.set(cifPath, payload);
+        setCachedMcp(cifPath, payload);
         setCached(payload);
         if (!autoRefresh) {
           autoRefreshAttemptsRef.current.clear();
@@ -88,11 +117,16 @@ export function McpViewer({ viz, refreshKey = 0 }: { viz: VizData | null; refres
       return;
     }
 
-    const nextCached = mcpCache.get(cifPath) ?? null;
+    const nextCached = getCachedMcp(cifPath);
     setCached(nextCached);
 
     const initialRenderKey = `${cifPath}:initial`;
-    if (!nextCached && mcpEnabled && !autoRefreshAttemptsRef.current.has(initialRenderKey)) {
+    const wasEvicted = evictedMcpKeys.delete(cifPath);
+    if (
+      !nextCached
+      && mcpEnabled
+      && (wasEvicted || !autoRefreshAttemptsRef.current.has(initialRenderKey))
+    ) {
       autoRefreshAttemptsRef.current.add(initialRenderKey);
       void requestRender(true);
       return;

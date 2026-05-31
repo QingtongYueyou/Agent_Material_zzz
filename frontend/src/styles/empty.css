@@ -1,0 +1,278 @@
+﻿/* Isolated empty-state home screen */
+.state-empty .main-grid {
+  grid-template-columns: minmax(300px, 30.6fr) minmax(480px, 41.2fr) minmax(260px, 26.2fr);
+  gap: 14px;
+}
+
+.state-empty .right-stack {
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.state-empty .chat-head {
+  min-height: 52px;
+  padding: 0 28px;
+  color: #ffffff;
+  background: linear-gradient(112deg, #2f61ff 0%, #7443ee 100%);
+  border-bottom: 0;
+  box-shadow: 0 12px 30px rgba(55, 77, 238, 0.22);
+}
+
+.state-empty .chat-head h2,
+.state-empty .chat-head .section-icon {
+  color: #ffffff;
+}
+
+.state-empty .visual-head,
+.state-empty .trace-panel .simple-head {
+  min-height: 52px;
+}
+
+.state-empty .chat-panel,
+.state-empty .visual-workspace,
+.state-empty .trace-panel,
+.state-empty .data-summary-panel {
+  border-radius: 10px;
+}
+
+.state-empty .assistant-intro {
+  min-height: 470px;
+}
+
+.state-empty .visual-workspace {
+  align-content: start;
+  grid-template-rows: 52px calc(50% + 36.5px);
+}
+
+.state-empty .visual-tools {
+  display: none;
+}
+
+.state-empty .visual-control-row {
+  width: 100%;
+}
+
+.state-empty .segmented {
+  border: 1px solid #dbe2ff;
+  border-radius: 8px;
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 6px 18px rgba(72, 86, 160, 0.08);
+}
+
+.state-empty .segmented button {
+  min-height: 43px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 16px;
+}
+
+.state-empty .segmented button.active {
+  color: #193fff;
+  background: #f3f5ff;
+  box-shadow:
+    inset 0 0 0 1px #cfd8ff,
+    0 6px 18px rgba(71, 89, 220, 0.12);
+}
+
+.state-empty .viewer-frame {
+  margin: 14px 30px 28px;
+  border-color: rgba(222, 228, 255, 0.95);
+  background: rgba(255, 255, 255, 0.74);
+  box-shadow: var(--inner-shadow);
+}
+
+.state-empty .analysis-cards {
+  display: none;
+}
+
+.empty-visual-scene {
+  height: 100%;
+  min-height: 470px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 20px;
+  padding: 22px;
+  color: #213061;
+  background:
+    radial-gradient(circle at 50% 43%, rgba(77, 91, 255, 0.2), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(250, 252, 255, 0.9));
+  text-align: center;
+}
+
+.empty-cube {
+  position: relative;
+  width: min(100%, 560px);
+  height: 330px;
+  perspective: 780px;
+}
+
+.cube-top,
+.cube-back,
+.cube-floor {
+  position: absolute;
+  inset: 14px 38px 36px;
+  border: 1px solid rgba(172, 184, 250, 0.35);
+  background:
+    linear-gradient(90deg, rgba(124, 139, 232, 0.08) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(124, 139, 232, 0.08) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.cube-top {
+  height: 86px;
+  transform: rotateX(64deg) translateY(-42px);
+  transform-origin: center top;
+}
+
+.cube-back {
+  top: 54px;
+  bottom: 78px;
+  opacity: 0.7;
+}
+
+.cube-floor {
+  top: auto;
+  height: 125px;
+  transform: rotateX(66deg) translateY(35px);
+  transform-origin: center bottom;
+}
+
+.data-cloud,
+.neural-chip {
+  position: absolute;
+  left: 50%;
+  top: 58%;
+  transform: translate(-50%, -50%);
+}
+
+.data-cloud {
+  width: 290px;
+  height: 116px;
+  border-radius: 48% 52% 45% 55%;
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.9), transparent 28%),
+    radial-gradient(circle at 68% 38%, rgba(58, 74, 255, 0.58), transparent 26%),
+    linear-gradient(135deg, rgba(235, 239, 255, 0.94), rgba(92, 79, 232, 0.22));
+  filter: blur(0.2px) drop-shadow(0 24px 34px rgba(70, 83, 210, 0.2));
+  opacity: 0.86;
+}
+
+.cloud-two {
+  width: 250px;
+  height: 118px;
+  transform: translate(-70%, -45%) rotate(-12deg);
+  opacity: 0.62;
+}
+
+.cloud-three {
+  width: 238px;
+  height: 112px;
+  transform: translate(-30%, -44%) rotate(13deg);
+  opacity: 0.62;
+}
+
+.neural-chip {
+  width: 116px;
+  height: 48px;
+  border: 1px solid rgba(73, 86, 220, 0.2);
+  border-radius: 18px;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.74), transparent 46%),
+    linear-gradient(135deg, #b3b7ff, #7763f1);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    0 18px 40px rgba(60, 73, 203, 0.28);
+}
+
+.empty-cube .dot {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: #6975ff;
+  box-shadow: 0 0 14px rgba(82, 91, 255, 0.45);
+}
+
+.dot-1 { left: 20%; top: 49%; }
+.dot-2 { left: 24%; top: 55%; }
+.dot-3 { left: 28%; top: 52%; }
+.dot-4 { left: 33%; top: 60%; }
+.dot-5 { left: 37%; top: 47%; }
+.dot-6 { left: 42%; top: 55%; }
+.dot-7 { left: 46%; top: 45%; }
+.dot-8 { left: 51%; top: 53%; }
+.dot-9 { left: 55%; top: 43%; }
+.dot-10 { left: 61%; top: 52%; }
+.dot-11 { left: 66%; top: 46%; }
+.dot-12 { left: 72%; top: 55%; }
+.dot-13 { left: 76%; top: 49%; }
+.dot-14 { left: 31%; top: 38%; }
+.dot-15 { left: 39%; top: 34%; }
+.dot-16 { left: 48%; top: 37%; }
+.dot-17 { left: 58%; top: 35%; }
+.dot-18 { left: 67%; top: 39%; }
+.dot-19 { left: 25%; top: 67%; }
+.dot-20 { left: 35%; top: 70%; }
+.dot-21 { left: 45%; top: 66%; }
+.dot-22 { left: 55%; top: 70%; }
+.dot-23 { left: 64%; top: 67%; }
+.dot-24 { left: 74%; top: 68%; }
+.dot-25 { left: 52%; top: 28%; }
+.dot-26 { left: 82%; top: 41%; }
+
+.empty-visual-scene .viewer-empty-copy {
+  display: grid;
+  gap: 10px;
+}
+
+.empty-visual-scene .viewer-empty-copy strong {
+  color: #1c2d65;
+  font-size: 16px;
+}
+
+.empty-visual-scene .viewer-empty-copy span {
+  color: #243361;
+  font-size: 14px;
+}
+
+.state-empty .trace-empty-card,
+.state-empty .summary-empty-card {
+  min-height: 250px;
+}
+
+@media (max-width: 1180px) {
+  .state-empty .main-grid {
+    grid-template-columns: minmax(300px, 0.95fr) minmax(440px, 1.25fr);
+  }
+}
+
+@media (max-width: 860px) {
+  .state-empty .main-grid,
+  .state-empty .right-stack {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .state-empty .visual-workspace {
+    grid-template-rows: 58px minmax(420px, 1fr);
+  }
+
+  .state-empty .viewer-frame {
+    margin: 10px 14px 16px;
+  }
+
+  .empty-visual-scene {
+    min-height: 390px;
+    padding: 18px 14px;
+  }
+
+  .empty-cube {
+    height: 245px;
+  }
+
+  .data-cloud {
+    width: 220px;
+  }
+}
+

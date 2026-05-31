@@ -13,7 +13,14 @@ from fastapi.staticfiles import StaticFiles
 
 from api.schemas import ChatRequest, McpRenderRequest, MetricRequest
 from api.serialization import serialize_workflow_event
-from config.settings import BASE_DIR, CIF_DIR, MCP_ENABLED, MCP_REFRESH_SKEW_SEC, STATIC_DIR
+from config.settings import (
+    BASE_DIR,
+    CIF_DIR,
+    CORS_ALLOWED_ORIGINS,
+    MCP_ENABLED,
+    MCP_REFRESH_SKEW_SEC,
+    STATIC_DIR,
+)
 from core.mcp_client import MCPClientError, process_file
 from core.perf_metrics import append_interaction_metric, append_render_metric
 from core.spark_asset_ingest import ensure_auto_ingest_started, get_auto_ingest_status
@@ -29,7 +36,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -38,6 +45,7 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 _SERVED_ASSET_SUFFIXES = {".ksplat", ".ply", ".rad", ".radc", ".splat", ".spz"}
+_ASSET_ROOTS = (STATIC_DIR.resolve(),)
 
 
 @app.on_event("startup")
@@ -121,10 +129,8 @@ def _resolve_asset_file(relative_path: str) -> Path:
         raise HTTPException(status_code=400, detail="Asset path must be relative.")
 
     resolved = (BASE_DIR / candidate).resolve()
-    try:
-        resolved.relative_to(BASE_DIR.resolve())
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Asset path must be inside the project.") from exc
+    if not any(_is_relative_to(resolved, root) for root in _ASSET_ROOTS):
+        raise HTTPException(status_code=400, detail="Asset path must be inside static assets.")
 
     if resolved.suffix.lower() not in _SERVED_ASSET_SUFFIXES:
         raise HTTPException(status_code=404, detail="Unsupported asset file type.")
@@ -182,10 +188,16 @@ def cif_file(path: str = Query(..., min_length=1)) -> FileResponse:
 
 def _resolve_cif_path(raw_path: str) -> Path:
     candidate = Path(raw_path)
-    if not candidate.is_absolute():
-        candidate = CIF_DIR / candidate.name
+    if candidate.suffix.lower() != ".cif":
+        raise HTTPException(status_code=400, detail="CIF path must point to a .cif file.")
 
-    resolved = candidate.resolve()
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+    else:
+        if candidate.name != raw_path:
+            raise HTTPException(status_code=400, detail="CIF path must be a filename.")
+        resolved = (CIF_DIR / candidate.name).resolve()
+
     try:
         resolved.relative_to(CIF_DIR.resolve())
     except ValueError as exc:
@@ -194,6 +206,14 @@ def _resolve_cif_path(raw_path: str) -> Path:
     if not resolved.exists() or not resolved.is_file():
         raise HTTPException(status_code=404, detail="CIF file not found.")
     return resolved
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 @app.post("/api/mcp/render")

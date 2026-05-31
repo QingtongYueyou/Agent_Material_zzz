@@ -1,0 +1,89 @@
+﻿@media (max-width: 1180px) {
+  .main-grid {
+    grid-template-columns: minmax(300px, 0.9fr) minmax(440px, 1.2fr);
+  }
+
+  .right-stack {
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(360px, auto);
+  }
+}
+
+@media (max-width: 860px) {
+  .app-shell {
+    gap: 13px;
+    padding: 10px;
+  }
+
+  .top-bar {
+    min-height: auto;
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 14px;
+  }
+
+  .top-status {
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  h1 {
+    font-size: 21px;
+  }
+
+  .main-grid,
+  .right-stack {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+  }
+
+  .panel,
+  .chat-panel,
+  .visual-workspace {
+    height: auto;
+  }
+
+  .chat-panel {
+    min-height: 512px;
+  }
+
+  .visual-workspace {
+    min-height: 544px;
+    grid-template-rows: 58px 45px minmax(384px, 1fr);
+  }
+
+  .trace-panel,
+  .data-summary-panel {
+    min-height: 336px;
+  }
+
+  .chat-head,
+  .panel-head {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .visual-tools,
+  .viewer-frame {
+    margin-left: 13px;
+    margin-right: 13px;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .segmented {
+    width: 100%;
+  }
+
+  .segmented button {
+    min-width: 0;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+
+  .assistant-visual {
+    width: 184px;
+  }
+}
+

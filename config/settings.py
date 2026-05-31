@@ -9,6 +9,38 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
+
+def _csv_env(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _is_production_env(value: str) -> bool:
+    return value.strip().lower() in {"prod", "production"}
+
+
+def _build_cors_allowed_origins(app_env: str, raw_origins: str | None) -> list[str]:
+    configured = _csv_env(raw_origins)
+    if configured:
+        if _is_production_env(app_env):
+            allowed = [origin for origin in configured if origin != "*"]
+            if not allowed:
+                raise RuntimeError("CORS_ALLOWED_ORIGINS must not be '*' in production.")
+            return allowed
+        return configured
+
+    if _is_production_env(app_env):
+        raise RuntimeError("CORS_ALLOWED_ORIGINS must be configured in production.")
+
+    return [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+
 CIF_DIR = BASE_DIR / "cif_files"
 STATIC_DIR = BASE_DIR / "static"
 SPLAT_DIR = STATIC_DIR / "splat_files"
@@ -19,6 +51,8 @@ METRICS_DIR = BASE_DIR / "metrics"
 METRICS_RAW_DIR = METRICS_DIR / "raw"
 RENDER_METRICS_FILE = METRICS_RAW_DIR / "render_metrics.csv"
 INTERACTION_METRICS_FILE = METRICS_RAW_DIR / "interaction_metrics.csv"
+APP_ENV = (os.getenv("APP_ENV") or os.getenv("ENV") or "development").strip().lower()
+CORS_ALLOWED_ORIGINS = _build_cors_allowed_origins(APP_ENV, os.getenv("CORS_ALLOWED_ORIGINS"))
 SPARK_STATUS_FILE = SPLAT_PIPELINE_DIR / "spark_asset_pipeline_status.json"
 SPARK_AUTO_VARIANT = (os.getenv("SPARK_AUTO_VARIANT", "balanced") or "balanced").strip().lower()
 SPARK_AUTO_INGEST = (os.getenv("SPARK_AUTO_INGEST", "true") or "true").strip().lower() in {

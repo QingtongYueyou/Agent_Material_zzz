@@ -28,7 +28,7 @@ def create_chat_completion(
     tool_choice: str | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not POE_API_KEY:
-        raise LLMClientError("POE_API_KEY ???")
+        raise LLMClientError("未配置 POE_API_KEY，无法调用大模型服务。")
 
     payload: dict[str, Any] = {
         "model": model or LLM_MODEL_ID,
@@ -59,15 +59,15 @@ def create_chat_completion(
             detail = e.read().decode("utf-8", errors="ignore")
         except Exception:
             detail = str(e)
-        raise LLMClientError(f"LLM HTTP ??: {detail}") from e
+        raise LLMClientError(f"大模型服务返回 HTTP 错误：{detail}") from e
     except Exception as e:
-        raise LLMClientError(f"LLM ????: {e}") from e
+        raise LLMClientError(f"调用大模型服务失败：{e}") from e
 
     try:
         data = json.loads(body)
         return data["choices"][0]["message"]
     except Exception as e:
-        raise LLMClientError(f"LLM ??????: {e}") from e
+        raise LLMClientError(f"解析大模型响应失败：{e}") from e
 
 
 def chat_completion(
@@ -87,5 +87,5 @@ def chat_completion(
     )
     content = message.get("content") or ""
     if not isinstance(content, str):
-        raise LLMClientError("LLM ??????: message content is not text")
+        raise LLMClientError("大模型响应格式错误：message content 不是文本。")
     return content.strip()

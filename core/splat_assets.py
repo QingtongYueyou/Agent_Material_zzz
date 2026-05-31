@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from config.settings import BASE_DIR, SPLAT_DERIVED_DIR, SPLAT_DIR, SPLAT_SOURCE_DIR
-from core.perf_metrics import get_ply_bounds, get_ply_vertex_count
+from core.ply_utils import get_ply_bounds, get_ply_vertex_count
 
 
 def _candidate_asset_keys(filename: str) -> list[str]:

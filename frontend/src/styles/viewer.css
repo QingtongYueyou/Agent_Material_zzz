@@ -1,0 +1,401 @@
+﻿.visual-workspace {
+  display: grid;
+  grid-template-rows: 61px auto minmax(0, 1fr);
+}
+
+.visual-head {
+  padding-left: 27px;
+}
+
+.visual-tools {
+  padding: 3px 24px 0;
+}
+
+.visual-control-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.segmented {
+  display: inline-grid;
+  grid-template-columns: minmax(94px, auto) minmax(94px, auto);
+  gap: 0;
+  padding: 3px;
+  border: 1px solid #d8dfff;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 6px 18px rgba(72, 86, 160, 0.08);
+}
+
+.segmented button {
+  min-height: 35px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 13px;
+  border-radius: 6px;
+  color: #2d376a;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.segmented button.active {
+  color: #193fff;
+  background: #eef2ff;
+  box-shadow:
+    inset 0 0 0 1px #cfd8ff,
+    0 6px 18px rgba(71, 89, 220, 0.12);
+}
+
+.quality-select {
+  width: 112px;
+  height: 35px;
+  min-width: 92px;
+  border: 1px solid #d8dfff;
+  border-radius: 8px;
+  padding: 0 9px;
+  color: #2d376a;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 6px 18px rgba(72, 86, 160, 0.08);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.quality-select:disabled {
+  opacity: 0.55;
+}
+
+.pipeline-note {
+  margin: 8px 18px 0;
+  padding: 9px 11px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pipeline-note.info {
+  border: 1px solid rgba(35, 88, 255, 0.16);
+  background: rgba(238, 243, 255, 0.9);
+  color: #2358ff;
+}
+
+.pipeline-note.warning {
+  border: 1px solid rgba(226, 93, 112, 0.22);
+  background: rgba(255, 241, 244, 0.94);
+  color: #bc4358;
+}
+
+.viewer-frame {
+  min-height: 0;
+  margin: 11px 22px 22px 24px;
+  border: 1px solid rgba(222, 228, 255, 0.95);
+  border-radius: 13px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 249, 255, 0.96));
+  box-shadow: var(--inner-shadow);
+  overflow: hidden;
+}
+
+.splat-shell,
+.mcp-shell,
+.mcp-shell iframe {
+  width: 100%;
+  height: 100%;
+}
+
+.splat-shell,
+.mcp-shell {
+  position: relative;
+  min-height: 256px;
+  background: #101524;
+  overflow: hidden;
+}
+
+.splat-shell iframe,
+.mcp-shell iframe {
+  display: block;
+  border: 0;
+}
+
+.splat-stage,
+.splat-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.splat-stage {
+  position: absolute;
+  inset: 0;
+}
+
+.splat-canvas {
+  display: block;
+  touch-action: none;
+}
+
+.viewer-empty {
+  height: 100%;
+  min-height: 256px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 14px;
+  color: #243361;
+  text-align: center;
+}
+
+.viewer-empty-showcase {
+  padding: 21px 21px 27px;
+}
+
+.viewer-empty.warning {
+  color: #743344;
+  background: #fff2f5;
+}
+
+.viewer-empty.compact {
+  min-height: 168px;
+  padding: 19px;
+}
+
+.viewer-empty-copy {
+  display: grid;
+  gap: 11px;
+}
+
+.viewer-empty-copy strong {
+  color: #27376f;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.viewer-empty-copy span {
+  color: #243361;
+  font-size: 14px;
+}
+
+.crystal-stage {
+  position: relative;
+  width: min(100%, 448px);
+  height: min(45vh, 352px);
+  min-height: 256px;
+  border-radius: 11px;
+  background:
+    radial-gradient(circle at 48% 56%, rgba(18, 217, 200, 0.2), transparent 23%),
+    radial-gradient(circle at 62% 30%, rgba(36, 72, 255, 0.14), transparent 24%),
+    linear-gradient(90deg, rgba(91, 111, 192, 0.12) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(91, 111, 192, 0.1) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(241, 246, 255, 0.78));
+  background-size: auto, auto, 27px 27px, 27px 27px, auto;
+  overflow: hidden;
+}
+
+.crystal-stage::before {
+  content: "";
+  position: absolute;
+  left: 16%;
+  right: 13%;
+  top: 15%;
+  height: 52%;
+  border: 1px solid rgba(82, 102, 190, 0.18);
+  border-radius: 3px;
+  background:
+    linear-gradient(120deg, transparent 0 22%, rgba(36, 72, 255, 0.12) 22.2% 22.8%, transparent 23% 76%, rgba(18, 217, 200, 0.16) 76.2% 76.8%, transparent 77%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.48), transparent);
+  box-shadow:
+    26px 26px 0 -1px rgba(255, 255, 255, 0.2),
+    26px 26px 0 rgba(96, 113, 196, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  transform: skewX(-8deg);
+}
+
+.crystal-stage::after {
+  content: "";
+  position: absolute;
+  left: 13%;
+  right: 10%;
+  bottom: 13%;
+  height: 32%;
+  background:
+    linear-gradient(90deg, transparent 0 4%, rgba(36, 72, 255, 0.12) 4% 4.3%, transparent 4.3% 21%, rgba(18, 217, 200, 0.18) 21% 21.3%, transparent 21.3% 74%, rgba(209, 139, 47, 0.16) 74% 74.35%, transparent 74.35%),
+    linear-gradient(180deg, rgba(190, 207, 255, 0.2), rgba(255, 255, 255, 0));
+  clip-path: polygon(0 54%, 11% 28%, 29% 42%, 45% 16%, 62% 32%, 80% 20%, 100% 48%, 86% 78%, 61% 70%, 43% 87%, 21% 72%);
+  filter: blur(0.2px);
+  opacity: 0.78;
+}
+
+.stage-box i {
+  position: absolute;
+  z-index: 1;
+  border: 1px solid rgba(84, 105, 196, 0.17);
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.stage-box i:nth-child(1) {
+  left: 27%;
+  right: 19%;
+  top: 22%;
+  height: 11%;
+  transform: skewX(24deg);
+}
+
+.stage-box i:nth-child(2) {
+  left: 18%;
+  right: 8%;
+  top: 33%;
+  bottom: 29%;
+}
+
+.stage-box i:nth-child(3) {
+  left: 23%;
+  right: 5%;
+  bottom: 22%;
+  height: 16%;
+  transform: skewX(-24deg);
+}
+
+.crystal-core {
+  position: absolute;
+  left: 50%;
+  bottom: 24%;
+  z-index: 4;
+  width: 150px;
+  height: 68px;
+  border: 1px solid rgba(36, 72, 255, 0.28);
+  border-radius: 13px;
+  background:
+    radial-gradient(circle at 26% 22%, rgba(255, 255, 255, 0.76), transparent 25%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.78), transparent 48%),
+    linear-gradient(135deg, #dce9ff 0%, #76def0 30%, #4266ff 68%, #321fc3 100%);
+  box-shadow:
+    inset 0 9px 18px rgba(255, 255, 255, 0.38),
+    inset 0 -12px 22px rgba(34, 48, 170, 0.3),
+    0 18px 30px rgba(45, 61, 183, 0.26),
+    0 0 44px rgba(18, 217, 200, 0.22);
+  transform: translateX(-50%) rotate(-1deg) skewX(-7deg);
+}
+
+.crystal-core::before,
+.crystal-core::after {
+  content: "";
+  position: absolute;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.crystal-core::before {
+  inset: 11px 15px 17px;
+  border: 1px solid rgba(255, 255, 255, 0.46);
+}
+
+.crystal-core::after {
+  left: 24px;
+  right: 22px;
+  top: 27px;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow:
+    0 17px 0 rgba(255, 255, 255, 0.25),
+    92px -28px 0 -2px rgba(18, 217, 200, 0.62),
+    -74px -16px 0 -2px rgba(209, 139, 47, 0.58);
+}
+
+.crystal-cloud {
+  position: absolute;
+  display: block;
+  z-index: 3;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(194, 230, 238, 0.42)),
+    repeating-linear-gradient(42deg, transparent 0 10px, rgba(36, 72, 255, 0.13) 11px 12px),
+    repeating-linear-gradient(-35deg, transparent 0 15px, rgba(18, 217, 200, 0.1) 16px 17px);
+  filter: drop-shadow(0 15px 18px rgba(53, 73, 149, 0.14));
+  opacity: 0.88;
+}
+
+.cloud-a {
+  left: 13%;
+  bottom: 15%;
+  width: 190px;
+  height: 116px;
+  clip-path: polygon(5% 70%, 14% 38%, 30% 22%, 47% 44%, 61% 15%, 82% 38%, 96% 70%, 78% 90%, 46% 82%, 28% 100%);
+  transform: rotate(-8deg);
+}
+
+.cloud-b {
+  right: 10%;
+  bottom: 16%;
+  width: 202px;
+  height: 124px;
+  clip-path: polygon(4% 58%, 18% 29%, 35% 38%, 47% 8%, 66% 32%, 88% 25%, 99% 60%, 84% 92%, 55% 82%, 30% 96%);
+  transform: rotate(10deg);
+}
+
+.cloud-c {
+  left: 33%;
+  bottom: 24%;
+  width: 174px;
+  height: 134px;
+  clip-path: polygon(8% 65%, 20% 28%, 42% 10%, 60% 26%, 78% 18%, 95% 54%, 81% 88%, 48% 96%, 28% 82%);
+  transform: rotate(-2deg);
+}
+
+.particle {
+  position: absolute;
+  z-index: 5;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2448ff;
+  box-shadow:
+    0 0 0 4px rgba(36, 72, 255, 0.08),
+    0 0 16px rgba(36, 72, 255, 0.48);
+}
+
+.particle-1 {
+  left: 15%;
+  top: 40%;
+  background: #12d9c8;
+  box-shadow:
+    0 0 0 4px rgba(18, 217, 200, 0.08),
+    0 0 16px rgba(18, 217, 200, 0.42);
+}
+
+.particle-2 {
+  left: 28%;
+  top: 34%;
+}
+
+.particle-3 {
+  right: 25%;
+  top: 31%;
+}
+
+.particle-4 {
+  right: 15%;
+  top: 47%;
+  background: #d18b2f;
+  box-shadow:
+    0 0 0 4px rgba(209, 139, 47, 0.08),
+    0 0 16px rgba(209, 139, 47, 0.42);
+}
+
+.particle-5 {
+  left: 43%;
+  top: 28%;
+  width: 5px;
+  height: 5px;
+}
+
+.particle-6 {
+  right: 41%;
+  top: 23%;
+  width: 5px;
+  height: 5px;
+  background: #12d9c8;
+}
+
