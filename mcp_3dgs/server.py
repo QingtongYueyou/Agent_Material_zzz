@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from config.settings import THREEDGS_MCP_API_KEY
 from mcp_3dgs import rendering
 
 
@@ -56,8 +57,17 @@ def _tool_spec() -> dict[str, Any]:
     }
 
 
+def _is_authorized(request: Request) -> bool:
+    if not THREEDGS_MCP_API_KEY:
+        return True
+    return request.headers.get("visualization-api-key") == THREEDGS_MCP_API_KEY
+
+
 @app.post("/mcp")
 async def mcp_endpoint(request: Request) -> JSONResponse:
+    if not _is_authorized(request):
+        return _json_rpc_error(None, -32001, "Unauthorized 3DGS MCP request.")
+
     try:
         payload = await request.json()
     except json.JSONDecodeError:
@@ -113,6 +123,8 @@ def health() -> dict[str, Any]:
         "service": "agent-material-3dgs-mcp",
         "sessions": len(rendering.sessions),
         "public_base_url": rendering._public_base_url(),
+        "auth_required": bool(THREEDGS_MCP_API_KEY),
+        "session_file": str(rendering.THREEDGS_SESSION_FILE),
     }
 
 

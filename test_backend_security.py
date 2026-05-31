@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from config.settings import CIF_DIR, STATIC_DIR, _build_cors_allowed_origins
+from config.settings import CIF_DIR, STATIC_DIR, _build_cors_allowed_origins, _validate_3dgs_public_base_url
 
 
 class CorsConfigTests(unittest.TestCase):
@@ -22,6 +22,26 @@ class CorsConfigTests(unittest.TestCase):
         origins = _build_cors_allowed_origins("development", None)
 
         self.assertIn("http://localhost:5173", origins)
+
+
+class ThreeDGSConfigTests(unittest.TestCase):
+    def test_3dgs_public_base_url_must_be_absolute_http_url(self) -> None:
+        with self.assertRaises(RuntimeError):
+            _validate_3dgs_public_base_url("development", "/viewer")
+
+        self.assertEqual(
+            _validate_3dgs_public_base_url("development", "http://127.0.0.1:8090/"),
+            "http://127.0.0.1:8090",
+        )
+
+    def test_3dgs_public_base_url_rejects_localhost_in_production(self) -> None:
+        with self.assertRaises(RuntimeError):
+            _validate_3dgs_public_base_url("production", "http://127.0.0.1:8090")
+
+        self.assertEqual(
+            _validate_3dgs_public_base_url("production", "https://viewer.example.com"),
+            "https://viewer.example.com",
+        )
 
 
 class PathResolutionTests(unittest.TestCase):

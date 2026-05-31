@@ -5,10 +5,25 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
 from mcp_3dgs import server
 
 
 class ThreeDGSViewerAssetTests(unittest.TestCase):
+    def test_mcp_endpoint_requires_api_key_when_configured(self) -> None:
+        client = TestClient(server.app)
+        payload = {"jsonrpc": "2.0", "id": "1", "method": "tools/list", "params": {}}
+
+        with patch.object(server, "THREEDGS_MCP_API_KEY", "secret"):
+            unauthorized = client.post("/mcp", json=payload)
+            authorized = client.post("/mcp", json=payload, headers={"visualization-api-key": "secret"})
+
+        self.assertEqual(unauthorized.status_code, 200)
+        self.assertEqual(unauthorized.json()["error"]["code"], -32001)
+        self.assertEqual(authorized.status_code, 200)
+        self.assertIn("result", authorized.json())
+
     def test_unbuilt_viewer_dist_returns_clear_nonblank_html(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             dist_dir = Path(tmp) / "dist"

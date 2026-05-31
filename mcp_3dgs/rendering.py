@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from urllib.parse import quote
 
-from config.settings import SPLAT_DIR, THREEDGS_PUBLIC_BASE_URL, THREEDGS_RENDER_TTL_SEC
+from config.settings import (
+    SPLAT_DIR,
+    THREEDGS_PUBLIC_BASE_URL,
+    THREEDGS_RENDER_TTL_SEC,
+    THREEDGS_SESSION_FILE,
+)
 from core.splat_assets import resolve_splat_asset
 
 
@@ -46,6 +53,7 @@ class SessionExpiredError(LookupError):
 
 
 sessions: dict[str, RenderSession] = {}
+_SESSION_LOCK = Lock()
 
 
 def _now() -> float:
@@ -62,6 +70,70 @@ def _is_relative_to(path: Path, root: Path) -> bool:
 
 def _public_base_url() -> str:
     return THREEDGS_PUBLIC_BASE_URL.rstrip("/")
+
+
+def _session_to_dict(session: RenderSession) -> dict[str, Any]:
+    return {
+        "session_id": session.session_id,
+        "filename": session.filename,
+        "quality": session.quality,
+        "created_at": session.created_at,
+        "expires_at": session.expires_at,
+        "ttl_sec": session.ttl_sec,
+        "asset": session.asset,
+        "render_url": session.render_url,
+    }
+
+
+def _session_from_dict(payload: dict[str, Any]) -> RenderSession | None:
+    try:
+        asset = payload["asset"]
+        if not isinstance(asset, dict):
+            return None
+        return RenderSession(
+            session_id=str(payload["session_id"]),
+            filename=str(payload["filename"]),
+            quality=str(payload["quality"]),
+            created_at=float(payload["created_at"]),
+            expires_at=float(payload["expires_at"]),
+            ttl_sec=int(payload["ttl_sec"]),
+            asset=asset,
+            render_url=str(payload["render_url"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def load_sessions() -> None:
+    with _SESSION_LOCK:
+        try:
+            raw = json.loads(THREEDGS_SESSION_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+
+        loaded: dict[str, RenderSession] = {}
+        items = raw.get("sessions") if isinstance(raw, dict) else []
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                session = _session_from_dict(item)
+                if session is not None:
+                    loaded[session.session_id] = session
+        sessions.clear()
+        sessions.update(loaded)
+
+
+def save_sessions() -> None:
+    with _SESSION_LOCK:
+        THREEDGS_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": 1,
+            "sessions": [_session_to_dict(session) for session in sessions.values()],
+        }
+        temp_path = THREEDGS_SESSION_FILE.with_suffix(".tmp")
+        temp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        temp_path.replace(THREEDGS_SESSION_FILE)
 
 
 def validate_lookup_filename(filename: str) -> str:
@@ -149,13 +221,17 @@ def session_response(session: RenderSession) -> dict[str, Any]:
 
 
 def prune_expired_sessions() -> None:
+    load_sessions()
     current = _now()
     expired = [session_id for session_id, session in sessions.items() if session.expires_at <= current]
     for session_id in expired:
         sessions.pop(session_id, None)
+    if expired:
+        save_sessions()
 
 
 def create_render(filename: str, quality: str = DEFAULT_QUALITY, ttl_sec: int | None = None) -> dict[str, Any]:
+    load_sessions()
     lookup_name = validate_lookup_filename(filename)
     quality_name = (quality or DEFAULT_QUALITY).strip() or DEFAULT_QUALITY
     ttl = THREEDGS_RENDER_TTL_SEC if ttl_sec is None else int(ttl_sec)
@@ -181,14 +257,17 @@ def create_render(filename: str, quality: str = DEFAULT_QUALITY, ttl_sec: int | 
     )
     prune_expired_sessions()
     sessions[session_id] = session
+    save_sessions()
     return session_response(session)
 
 
 def get_session_config(session_id: str) -> dict[str, Any]:
+    load_sessions()
     session = sessions.get(session_id)
     if session is None:
         raise SessionNotFoundError("Viewer session not found.")
     if session.expires_at <= _now():
         sessions.pop(session_id, None)
+        save_sessions()
         raise SessionExpiredError("Viewer session has expired.")
     return session_response(session)

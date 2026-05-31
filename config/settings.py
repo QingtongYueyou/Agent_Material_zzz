@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -39,6 +40,22 @@ def _build_cors_allowed_origins(app_env: str, raw_origins: str | None) -> list[s
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ]
+
+
+def _validate_3dgs_public_base_url(app_env: str, raw_url: str | None) -> str:
+    value = (raw_url or "http://127.0.0.1:8090").strip().rstrip("/")
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("THREEDGS_PUBLIC_BASE_URL must be an absolute http(s) URL.")
+
+    if _is_production_env(app_env) and (parsed.hostname or "").lower() in {
+        "127.0.0.1",
+        "localhost",
+        "0.0.0.0",
+    }:
+        raise RuntimeError("THREEDGS_PUBLIC_BASE_URL must be browser-accessible in production.")
+
+    return value
 
 
 CIF_DIR = BASE_DIR / "cif_files"
@@ -80,8 +97,12 @@ THREEDGS_MCP_ENABLED = (os.getenv("THREEDGS_MCP_ENABLED", "true") or "true").str
 }
 THREEDGS_MCP_SERVER_URL = os.getenv("THREEDGS_MCP_SERVER_URL", "http://127.0.0.1:8090/mcp")
 THREEDGS_MCP_API_KEY = os.getenv("THREEDGS_MCP_API_KEY", "")
-THREEDGS_PUBLIC_BASE_URL = os.getenv("THREEDGS_PUBLIC_BASE_URL", "http://127.0.0.1:8090").rstrip("/")
+THREEDGS_PUBLIC_BASE_URL = _validate_3dgs_public_base_url(
+    APP_ENV,
+    os.getenv("THREEDGS_PUBLIC_BASE_URL"),
+)
 THREEDGS_RENDER_TTL_SEC = int(os.getenv("THREEDGS_RENDER_TTL_SEC", "600"))
+THREEDGS_SESSION_FILE = SPLAT_PIPELINE_DIR / "3dgs_sessions.json"
 
 
 def _resolve_spark_root() -> Path:
