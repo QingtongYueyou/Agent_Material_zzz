@@ -44,6 +44,8 @@ tools/vendor/
 frontend/node_modules/
 frontend/dist/
 frontend/test-results/
+services/three_dgs_mcp/viewer/node_modules/
+services/three_dgs_mcp/viewer/dist/
 
 # Large binaries
 cloudflared.exe

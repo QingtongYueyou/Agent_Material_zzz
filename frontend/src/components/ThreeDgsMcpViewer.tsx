@@ -75,7 +75,9 @@ export function ThreeDgsMcpViewer({ viz, quality, refreshKey = 0 }: ThreeDgsMcpV
   const [cached, setCached] = useState<ThreeDgsRenderResponse | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const loadingRef = useRef(false);
+  const loadingKeyRef = useRef<string | null>(null);
+  const requestIdRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
   const autoRefreshAttemptsRef = useRef(new Set<string>());
 
   const filename = viz?.filename ?? "";
@@ -85,16 +87,24 @@ export function ThreeDgsMcpViewer({ viz, quality, refreshKey = 0 }: ThreeDgsMcpV
 
   const requestRender = useCallback(
     async (autoRefresh = false) => {
-      if (!filename || loadingRef.current) {
+      if (!filename || !key || loadingKeyRef.current === key) {
         return;
       }
 
-      loadingRef.current = true;
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const requestId = requestIdRef.current + 1;
+      requestIdRef.current = requestId;
+      loadingKeyRef.current = key;
       setLoading(true);
       setError("");
 
       try {
-        const payload = await renderThreeDgs(filename, quality);
+        const payload = await renderThreeDgs(filename, quality, controller.signal);
+        if (requestId !== requestIdRef.current || loadingKeyRef.current !== key) {
+          return;
+        }
         if (!payload.ok || !payload.render_url) {
           throw new Error("3DGS MCP response did not include a render_url.");
         }
@@ -104,20 +114,31 @@ export function ThreeDgsMcpViewer({ viz, quality, refreshKey = 0 }: ThreeDgsMcpV
           autoRefreshAttemptsRef.current.clear();
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : "3DGS MCP render failed";
-        setError(autoRefresh ? `Auto refresh failed: ${message}` : message);
+        if (!controller.signal.aborted) {
+          const message = err instanceof Error ? err.message : "3DGS MCP render failed";
+          setError(autoRefresh ? `Auto refresh failed: ${message}` : message);
+        }
       } finally {
-        loadingRef.current = false;
-        setLoading(false);
+        if (requestId === requestIdRef.current) {
+          loadingKeyRef.current = null;
+          setLoading(false);
+        }
       }
     },
     [filename, key, quality],
   );
 
   useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
     setError("");
 
     if (!filename || !key) {
+      abortRef.current?.abort();
       setCached(null);
       return;
     }

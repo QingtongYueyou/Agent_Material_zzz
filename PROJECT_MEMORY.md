@@ -7,14 +7,25 @@ This project is now a separated FastAPI + React materials analysis application.
 - Project root: `D:\wyfzzz\PyCharm\MyProjects\Agent_Material\mytest\Agent`
 - Backend entry: `api/main.py`
 - Frontend entry: `frontend/src/App.tsx`
+- 3DGS MCP service entry: `services/three_dgs_mcp/server.py`
 - Branch for this work: `frontend-ui-optimization`
 
 ## Runtime
 
+Python/backend commands should be run from the conda environment `agno-assist`.
+
 Backend:
 
 ```bash
+conda activate agno-assist
 uvicorn api.main:app --host 127.0.0.1 --port 8080
+```
+
+3DGS MCP service:
+
+```bash
+conda activate agno-assist
+uvicorn services.three_dgs_mcp.server:app --host 127.0.0.1 --port 8090
 ```
 
 Frontend:
@@ -47,6 +58,8 @@ The Vite dev server proxies `/api`, `/health`, and `/static` to `http://127.0.0.
 - `core/processor.py`: CIF parsing and chart data generation.
 - `core/splat_assets.py`: manifest-first 3DGS/Spark asset resolution.
 - `core/mcp_client.py`: MCP JSON-RPC client.
+- `core/3dgs_mcp_client.py`: MCP 2025-06-18 client for the 3DGS render service.
+- `services/three_dgs_mcp/`: standalone 3DGS MCP service and embedded viewer app.
 - `frontend/src/App.tsx`: application shell and stream event handling.
 - `frontend/src/components/`: chat, trace, visualization, charts, 3DGS, MCP components.
 

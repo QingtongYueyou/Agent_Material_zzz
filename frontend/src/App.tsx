@@ -22,6 +22,8 @@ export default function App() {
   const [running, setRunning] = useState(false);
   const [backendOk, setBackendOk] = useState(false);
   const streamingIdRef = useRef<string | null>(null);
+  const answerTimerRef = useRef<number | null>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
   const hasAnswer = messages.some((message) => message.role === "assistant" && message.content.trim().length > 0);
 
   useEffect(() => {
@@ -49,25 +51,96 @@ export default function App() {
   }, []);
 
   async function submitQuery(query: string) {
-    setMessages((current) => [...current, { id: makeId("user"), role: "user", content: query }]);
+    stopAnswerTextStream();
+    chatAbortRef.current?.abort();
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
+    const assistantId = makeId("assistant");
+    setMessages((current) => [
+      ...current,
+      { id: makeId("user"), role: "user", content: query },
+      { id: assistantId, role: "assistant", content: "正在生成回答...", streaming: true }
+    ]);
     setSteps([]);
     setViz(null);
     setTraceId("");
     setRunning(true);
-    streamingIdRef.current = null;
+    streamingIdRef.current = assistantId;
 
     try {
-      await streamChat(query, handleWorkflowEvent);
+      await streamChat(query, handleWorkflowEvent, controller.signal);
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        return;
+      }
       const message = err instanceof Error ? err.message : "请求失败";
+      updateStreamingMessage(`后端请求失败：${message}`);
+    } finally {
+      if (!controller.signal.aborted) {
+        setRunning(false);
+      }
+    }
+  }
+
+  function stopAnswerTextStream() {
+    if (answerTimerRef.current !== null) {
+      window.clearInterval(answerTimerRef.current);
+      answerTimerRef.current = null;
+    }
+  }
+
+  function updateStreamingMessage(content: string) {
+    stopAnswerTextStream();
+    const streamId = streamingIdRef.current;
+    setMessages((current) => {
+      if (streamId) {
+        const idx = current.findIndex((m) => m.id === streamId);
+        if (idx >= 0) {
+          const next = [...current];
+          next[idx] = { ...next[idx], content, streaming: false };
+          return next;
+        }
+      }
+      return [...current, { id: makeId("assistant"), role: "assistant", content }];
+    });
+    streamingIdRef.current = null;
+  }
+
+  function streamAnswerText(content: string) {
+    stopAnswerTextStream();
+
+    const streamId = streamingIdRef.current;
+    const finalContent = content || "未生成回答。";
+    if (!streamId) {
       setMessages((current) => [
         ...current,
-        { id: makeId("assistant"), role: "assistant", content: `后端请求失败：${message}` }
+        { id: makeId("assistant"), role: "assistant", content: finalContent }
       ]);
-    } finally {
-      streamingIdRef.current = null;
-      setRunning(false);
+      return;
     }
+
+    let cursor = 0;
+    const chunkSize = finalContent.length > 600 ? 8 : 4;
+
+    setMessages((current) => updateMessageContent(current, streamId, "", true));
+    answerTimerRef.current = window.setInterval(() => {
+      cursor = Math.min(cursor + chunkSize, finalContent.length);
+      const visible = finalContent.slice(0, cursor);
+      const done = cursor >= finalContent.length;
+
+      if (streamingIdRef.current !== streamId) {
+        // A new query arrived while streaming — discard this stale update.
+        stopAnswerTextStream();
+        return;
+      }
+
+      setMessages((current) => updateMessageContent(current, streamId, visible, !done));
+
+      if (done) {
+        streamingIdRef.current = null;
+        stopAnswerTextStream();
+      }
+    }, 24);
   }
 
   function handleWorkflowEvent(event: WorkflowEvent) {
@@ -109,32 +182,12 @@ export default function App() {
       setTraceId(event.trace_id ?? "");
       setViz(event.viz ?? null);
       const finalAnswer = event.answer ?? "";
-      const streamId = streamingIdRef.current;
-
-      setMessages((current) => {
-        if (streamId) {
-          const idx = current.findIndex((m) => m.id === streamId);
-          if (idx >= 0) {
-            const next = [...current];
-            next[idx] = { ...next[idx], content: finalAnswer || next[idx].content, streaming: false };
-            return next;
-          }
-        }
-        return [...current, { id: makeId("assistant"), role: "assistant", content: finalAnswer }];
-      });
-      streamingIdRef.current = null;
+      streamAnswerText(finalAnswer);
       return;
     }
 
     if (event.type === "error") {
-      setMessages((current) => [
-        ...current,
-        {
-          id: makeId("assistant"),
-          role: "assistant",
-          content: `工作流出错：${event.detail ?? event.error_type ?? "unknown error"}`
-        }
-      ]);
+      updateStreamingMessage(`工作流出错：${event.detail ?? event.error_type ?? "unknown error"}`);
     }
   }
 
@@ -168,6 +221,22 @@ export default function App() {
       </div>
     </main>
   );
+}
+
+function updateMessageContent(
+  messages: ChatMessage[],
+  id: string,
+  content: string,
+  streaming: boolean
+): ChatMessage[] {
+  const idx = messages.findIndex((message) => message.id === id);
+  if (idx < 0) {
+    return messages;
+  }
+
+  const next = [...messages];
+  next[idx] = { ...next[idx], content, streaming };
+  return next;
 }
 
 function findLastRunningStep(rows: StepRow[], stepName: string): number {

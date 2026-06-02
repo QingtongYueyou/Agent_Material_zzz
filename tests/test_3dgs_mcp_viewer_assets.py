@@ -3,43 +3,69 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.parse import urlparse
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from mcp_3dgs import server
+from services.three_dgs_mcp import server
 
 
 class ThreeDGSViewerAssetTests(unittest.TestCase):
+    def setUp(self) -> None:
+        server.rendering.sessions.clear()
+
+    def tearDown(self) -> None:
+        server.rendering.sessions.clear()
+
+    def _render_path(self, render_url: str) -> str:
+        parsed = urlparse(render_url)
+        return f"{parsed.path}?{parsed.query}"
+
     def test_mcp_endpoint_requires_api_key_when_configured(self) -> None:
         client = TestClient(server.app)
-        payload = {"jsonrpc": "2.0", "id": "1", "method": "tools/list", "params": {}}
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18"},
+        }
 
         with patch.object(server, "THREEDGS_MCP_API_KEY", "secret"):
             unauthorized = client.post("/mcp", json=payload)
-            authorized = client.post("/mcp", json=payload, headers={"visualization-api-key": "secret"})
+            authorized = client.post("/mcp", json=payload, headers={"Authorization": "Bearer secret"})
 
-        self.assertEqual(unauthorized.status_code, 200)
-        self.assertEqual(unauthorized.json()["error"]["code"], -32001)
+        self.assertEqual(unauthorized.status_code, 401)
         self.assertEqual(authorized.status_code, 200)
         self.assertIn("result", authorized.json())
 
     def test_unbuilt_viewer_dist_returns_clear_nonblank_html(self) -> None:
+        client = TestClient(server.app)
         with tempfile.TemporaryDirectory() as tmp:
             dist_dir = Path(tmp) / "dist"
+            session_file = Path(tmp) / "3dgs_sessions.json"
 
-            with patch.object(server, "VIEWER_INDEX_HTML", dist_dir / "index.html"):
-                html = server.viewer_session("session-abc")
+            with (
+                patch.object(server, "VIEWER_INDEX_HTML", dist_dir / "index.html"),
+                patch.object(server.rendering, "THREEDGS_SESSION_FILE", session_file),
+            ):
+                render = server.rendering.create_render("object.ply", ttl_sec=120)
+                response = client.get(self._render_path(render["render_url"]))
 
+        html = response.text
+        self.assertEqual(response.status_code, 200)
         self.assertIn("3DGS viewer app is not built", html)
         self.assertIn('id="root"', html)
-        self.assertIn('data-session-id="session-abc"', html)
+        self.assertIn(f'data-session-id="{render["session_id"]}"', html)
         self.assertIn("npm run build", html)
+        self.assertIn("token=", html)
 
     def test_built_viewer_index_rewrites_hashed_asset_urls(self) -> None:
+        client = TestClient(server.app)
         with tempfile.TemporaryDirectory() as tmp:
             dist_dir = Path(tmp) / "dist"
             assets_dir = dist_dir / "assets"
+            session_file = Path(tmp) / "3dgs_sessions.json"
             assets_dir.mkdir(parents=True)
             (assets_dir / "index-Bw9QmF.js").write_text("console.log('viewer');", encoding="utf-8")
             (assets_dir / "index-Bw9QmF.css").write_text("body{}", encoding="utf-8")
@@ -58,13 +84,50 @@ class ThreeDGSViewerAssetTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server, "VIEWER_INDEX_HTML", index_html):
-                html = server.viewer_session("session-xyz")
+            with (
+                patch.object(server, "VIEWER_INDEX_HTML", index_html),
+                patch.object(server.rendering, "THREEDGS_SESSION_FILE", session_file),
+            ):
+                render = server.rendering.create_render("object.ply", ttl_sec=120)
+                response = client.get(self._render_path(render["render_url"]))
 
-        self.assertIn('<main id="root" data-session-id="session-xyz"></main>', html)
+        html = response.text
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f'<main id="root" data-session-id="{render["session_id"]}"></main>', html)
         self.assertIn('href="/viewer/assets/index-Bw9QmF.css"', html)
         self.assertIn('src="/viewer/assets/index-Bw9QmF.js"', html)
         self.assertIn('id="session-config-url"', html)
+        self.assertIn("token=", html)
+
+    def test_viewer_config_and_asset_routes_require_valid_token(self) -> None:
+        client = TestClient(server.app)
+        with tempfile.TemporaryDirectory() as tmp:
+            session_file = Path(tmp) / "3dgs_sessions.json"
+            with patch.object(server.rendering, "THREEDGS_SESSION_FILE", session_file):
+                render = server.rendering.create_render("object.ply", ttl_sec=120)
+                parsed = urlparse(render["render_url"])
+                session_id = render["session_id"]
+                token_query = parsed.query
+                relative_path = render["asset"]["relative_path"]
+
+                missing = client.get(f"/viewer/sessions/{session_id}/config")
+                bad = client.get(f"/viewer/sessions/{session_id}/config?token=bad")
+                good = client.get(f"/viewer/sessions/{session_id}/config?{token_query}")
+                asset = client.get(f"/viewer/sessions/{session_id}/assets/{relative_path}?{token_query}")
+                other_path = server.rendering.SPLAT_DIR / "source" / "not_allowed_session_asset.ply"
+                other_path.write_bytes(b"ply")
+                try:
+                    other_relative = other_path.relative_to(server.rendering.SPLAT_DIR).as_posix()
+                    forbidden = client.get(f"/viewer/sessions/{session_id}/assets/{other_relative}?{token_query}")
+                finally:
+                    other_path.unlink(missing_ok=True)
+
+        self.assertEqual(missing.status_code, 403)
+        self.assertEqual(bad.status_code, 403)
+        self.assertEqual(good.status_code, 200)
+        self.assertIn("/viewer/sessions/", good.json()["asset"]["model_url"])
+        self.assertEqual(asset.status_code, 200)
+        self.assertEqual(forbidden.status_code, 403)
 
 
 if __name__ == "__main__":

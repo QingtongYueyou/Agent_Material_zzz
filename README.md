@@ -22,7 +22,7 @@ api/                     FastAPI 后端入口、请求模型、JSON 序列化
 frontend/                React + TypeScript 前端
 core/                    材料分析业务核心
 config/                  路径常量和环境变量
-mcp_3dgs/                3DGS MCP render_url 服务与独立 viewer
+services/three_dgs_mcp/    3DGS MCP render_url 子服务与独立 viewer
 cif_files/               CIF 缓存目录
 static/splat_files/      3DGS/Spark 源资产、派生资产和 manifest
 metrics/                 渲染/交互指标与分析脚本
@@ -69,7 +69,7 @@ SPARK_ROOT=D:/tools/spark
 首次使用或 viewer 代码更新后，先构建独立 3DGS viewer：
 
 ```bash
-cd mcp_3dgs/viewer
+cd services/three_dgs_mcp/viewer
 npm install
 npm run build
 ```
@@ -78,7 +78,7 @@ npm run build
 
 ```bash
 conda activate agno-assist
-uvicorn mcp_3dgs.server:app --host 127.0.0.1 --port 8090
+uvicorn services.three_dgs_mcp.server:app --host 127.0.0.1 --port 8090
 ```
 
 健康检查：
@@ -145,7 +145,7 @@ set VITE_3DGS_RENDER_MODE=local
 - `POST /mcp`：JSON-RPC 入口，支持 `tools/list` 和 `tools/call`。
 - `GET /viewer/sessions/{session_id}`：独立 3DGS viewer 页面。
 - `GET /viewer/sessions/{session_id}/config`：viewer 会话配置。
-- `GET /assets/{relative_path}`：安全托管 `.rad/.radc/.ply/.splat/.spz/.ksplat` 资源。
+- `GET /viewer/sessions/{session_id}/assets/{relative_path}?token=...`：按 viewer session 和 token 安全托管 `.rad/.radc/.ply/.splat/.spz/.ksplat` 资源。
 
 核心工具：
 
@@ -167,17 +167,17 @@ set VITE_3DGS_RENDER_MODE=local
   "ok": true,
   "source": "3dgs:mcp",
   "session_id": "...",
-  "render_url": "http://127.0.0.1:8090/viewer/sessions/...",
+  "render_url": "http://127.0.0.1:8090/viewer/sessions/...?token=...",
   "expires_at": 1780200600,
   "asset": {
-    "model_url": "http://127.0.0.1:8090/assets/derived/.../model.rad",
+    "model_url": "http://127.0.0.1:8090/viewer/sessions/.../assets/derived/.../model.rad?token=...",
     "enable_lod": true,
     "enable_paged": true
   }
 }
 ```
 
-如果配置了 `THREEDGS_MCP_API_KEY`，客户端必须在请求头中携带 `visualization-api-key`。
+如果配置了 `THREEDGS_MCP_API_KEY`，客户端必须在请求头中携带 `Authorization: Bearer <THREEDGS_MCP_API_KEY>`；旧的 `visualization-api-key` 仅保留兼容。
 
 `/api/chat/stream` 事件示例：
 
@@ -196,7 +196,7 @@ set VITE_3DGS_RENDER_MODE=local
 5. `core/processor.py` 解析 CIF，生成晶格、组成和 XRD 数据。
 6. `api/serialization.py` 将 Python/Pandas 对象转成前端 JSON。
 7. React 更新回答、执行轨迹和图表。
-8. MCP 3DGS 模式下，前端调用 `POST /api/3dgs/render`，主后端转发到 `mcp_3dgs.server`。
+8. MCP 3DGS 模式下，前端调用 `POST /api/3dgs/render`，主后端转发到 `services.three_dgs_mcp.server`。
 9. 3DGS MCP 服务解析资产、创建持久化 session，并返回独立 viewer 的 `render_url`。
 10. React 在 iframe 中展示 `/viewer/sessions/{session_id}`。
 
@@ -217,7 +217,7 @@ npm --prefix frontend run build
 3DGS viewer 构建：
 
 ```bash
-npm --prefix mcp_3dgs/viewer run build
+npm --prefix services/three_dgs_mcp/viewer run build
 ```
 
 浏览器冒烟测试：
@@ -245,4 +245,4 @@ MCP render_url 模式下，主前端调用 `POST /api/3dgs/render`，3DGS MCP �
 
 - 后端接口不要直接返回 Pandas DataFrame，统一走 `api/serialization.py`。
 - 不再恢复 Streamlit 入口或 Planner API 路径。
-- 大文件和生成产物不要提交：`frontend/node_modules/`、`frontend/dist/`、`frontend/test-results/`、`mcp_3dgs/viewer/node_modules/`、`mcp_3dgs/viewer/dist/`、CIF 缓存、metrics CSV、3DGS session JSON 和派生 3D 资产默认忽略。
+- 大文件和生成产物不要提交：`frontend/node_modules/`、`frontend/dist/`、`frontend/test-results/`、`services/three_dgs_mcp/viewer/node_modules/`、`services/three_dgs_mcp/viewer/dist/`、CIF 缓存、metrics CSV、3DGS session JSON 和派生 3D 资产默认忽略。

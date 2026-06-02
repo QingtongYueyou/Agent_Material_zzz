@@ -81,7 +81,12 @@ function sessionConfigUrl(sessionId: string): string {
     return new URL(injectedUrl, window.location.href).toString();
   }
 
-  return new URL(`/viewer/sessions/${encodeURIComponent(sessionId)}/config`, window.location.origin).toString();
+  const url = new URL(`/viewer/sessions/${encodeURIComponent(sessionId)}/config`, window.location.origin);
+  const token = new URLSearchParams(window.location.search).get("token");
+  if (token) {
+    url.searchParams.set("token", token);
+  }
+  return url.toString();
 }
 
 function absoluteUrl(path: string): string {

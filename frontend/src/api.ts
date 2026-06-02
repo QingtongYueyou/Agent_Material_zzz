@@ -31,12 +31,14 @@ export async function getHealth(): Promise<HealthResponse> {
 
 export async function streamChat(
   query: string,
-  onEvent: (event: WorkflowEvent) => void
+  onEvent: (event: WorkflowEvent) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const response = await fetch(apiUrl("/api/chat/stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query })
+    body: JSON.stringify({ query }),
+    signal,
   });
 
   if (!response.ok || !response.body) {
@@ -127,11 +129,16 @@ export async function renderMcp(cifPath: string): Promise<McpRenderResponse> {
   return response.json();
 }
 
-export async function renderThreeDgs(filename: string, quality?: string): Promise<ThreeDgsRenderResponse> {
+export async function renderThreeDgs(
+  filename: string,
+  quality?: string,
+  signal?: AbortSignal,
+): Promise<ThreeDgsRenderResponse> {
   const response = await fetch(apiUrl("/api/3dgs/render"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filename, quality })
+    body: JSON.stringify({ filename, quality }),
+    signal,
   });
   if (!response.ok) {
     let detail = "";
