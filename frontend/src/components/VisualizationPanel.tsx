@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import { Braces, Cuboid, RefreshCw } from "lucide-react";
 import { CompositionChart, LatticeChart, XrdChart } from "./DataCharts";
-import { SplatViewer } from "./SplatViewer";
 import { ThreeDgsMcpViewer } from "./ThreeDgsMcpViewer";
 import type { VizData } from "../types";
+import type { ComponentType } from "react";
+import type { SplatViewerProps } from "./SplatViewer";
+
+const SplatViewer = React.lazy(() => import("./SplatViewer").then((m) => ({ default: m.SplatViewer as ComponentType<any> })));
 
 const qualities = ["auto", "preview", "balanced", "full", "source"];
 const configuredRenderMode = import.meta.env.VITE_3DGS_RENDER_MODE === "local" ? "local" : "mcp";
@@ -104,7 +107,9 @@ export function VisualizationPanel({ viz }: { viz: VizData | null }) {
         ) : viewer === "mcp" ? (
           <ThreeDgsMcpViewer viz={viz} quality={quality} refreshKey={mcpRefreshKey} />
         ) : (
-          <SplatViewer viz={viz} quality={quality} refreshKey={localRefreshKey} />
+          <Suspense fallback={<div className="viewer-empty"><RefreshCw size={24} className="spin" /><span>加载本地 3DGS viewer...</span></div>}>
+            {React.createElement(SplatViewer as ComponentType<SplatViewerProps>, { viz, quality, refreshKey: localRefreshKey })}
+          </Suspense>
         )}
       </div>
 

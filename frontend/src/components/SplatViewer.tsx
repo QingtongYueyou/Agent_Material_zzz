@@ -11,7 +11,7 @@ import {
   type OrbitDrag,
 } from "../utils/splatCamera";
 
-interface SplatViewerProps {
+export interface SplatViewerProps {
   viz: VizData | null;
   quality: string;
   refreshKey?: number;

@@ -283,57 +283,72 @@ def prune_expired_sessions(*, already_loaded: bool = False) -> None:
         save_sessions()
 
 
+def _atomic_session_update(fn: callable) -> Any:
+    """Execute fn(sessions, load_sessions, save_sessions) under a single lock.
+
+    This guarantees that load → prune → mutate → save inside fn() is atomic
+    against concurrent requests and against concurrent _get_valid_session
+    expirations.
+    """
+    with _SESSION_LOCK:
+        load_sessions()
+        result = fn(sessions, load_sessions, save_sessions)
+        return result
+
+
 def create_render(filename: str, quality: str = DEFAULT_QUALITY, ttl_sec: int | None = None) -> dict[str, Any]:
-    load_sessions()
-    base_url = _public_base_url()
-    lookup_name = validate_lookup_filename(filename)
-    quality_name = (quality or DEFAULT_QUALITY).strip() or DEFAULT_QUALITY
-    ttl = THREEDGS_RENDER_TTL_SEC if ttl_sec is None else int(ttl_sec)
-    if ttl <= 0:
-        raise RenderCreateError("ttl_sec must be a positive integer.")
+    def _create(sessions: dict[str, RenderSession], load_fn: callable, save_fn: callable) -> dict[str, Any]:
+        base_url = _public_base_url()
+        lookup_name = validate_lookup_filename(filename)
+        quality_name = (quality or DEFAULT_QUALITY).strip() or DEFAULT_QUALITY
+        ttl = THREEDGS_RENDER_TTL_SEC if ttl_sec is None else int(ttl_sec)
+        if ttl <= 0:
+            raise RenderCreateError("ttl_sec must be a positive integer.")
 
-    asset = resolve_splat_asset(lookup_name, quality_preference=quality_name)
-    if asset is None:
-        raise RenderCreateError("No matching 3DGS splat asset found.")
+        asset = resolve_splat_asset(lookup_name, quality_preference=quality_name)
+        if asset is None:
+            raise RenderCreateError("No matching 3DGS splat asset found.")
 
-    session_id = uuid.uuid4().hex
-    viewer_token = secrets.token_urlsafe(32)
-    created_at = _now()
-    relative_path = str(asset.get("relative_path") or "")
-    session_asset = asset_response(asset, session_id, viewer_token)
-    stored_asset = dict(session_asset)
-    stored_asset["model_url"] = (
-        f"{base_url}/viewer/sessions/{quote(session_id, safe='')}/assets/"
-        f"{quote(relative_path, safe='/')}"
-    )
-    session = RenderSession(
-        session_id=session_id,
-        filename=lookup_name,
-        quality=quality_name,
-        created_at=created_at,
-        expires_at=created_at + ttl,
-        ttl_sec=ttl,
-        asset=stored_asset,
-        render_url=f"{base_url}/viewer/sessions/{session_id}",
-        viewer_token_hash=_viewer_token_hash(viewer_token),
-    )
-    prune_expired_sessions(already_loaded=True)
-    sessions[session_id] = session
-    save_sessions()
-    return session_response(session, viewer_token)
+        session_id = uuid.uuid4().hex
+        viewer_token = secrets.token_urlsafe(32)
+        created_at = _now()
+        relative_path = str(asset.get("relative_path") or "")
+        session_asset = asset_response(asset, session_id, viewer_token)
+        stored_asset = dict(session_asset)
+        stored_asset["model_url"] = (
+            f"{base_url}/viewer/sessions/{quote(session_id, safe='')}/assets/"
+            f"{quote(relative_path, safe='/')}"
+        )
+        session = RenderSession(
+            session_id=session_id,
+            filename=lookup_name,
+            quality=quality_name,
+            created_at=created_at,
+            expires_at=created_at + ttl,
+            ttl_sec=ttl,
+            asset=stored_asset,
+            render_url=f"{base_url}/viewer/sessions/{session_id}",
+            viewer_token_hash=_viewer_token_hash(viewer_token),
+        )
+        prune_expired_sessions(already_loaded=True)
+        sessions[session_id] = session
+        return session_response(session, viewer_token)
+
+    return _atomic_session_update(_create)
 
 
 def _get_valid_session(session_id: str, token: str) -> RenderSession:
-    load_sessions()
-    session = sessions.get(session_id)
-    if session is None:
-        raise SessionNotFoundError("Viewer session not found.")
-    if session.expires_at <= _now():
-        sessions.pop(session_id, None)
-        save_sessions()
-        raise SessionExpiredError("Viewer session has expired.")
-    _verify_viewer_token(session, token)
-    return session
+    with _SESSION_LOCK:
+        load_sessions()
+        session = sessions.get(session_id)
+        if session is None:
+            raise SessionNotFoundError("Viewer session not found.")
+        if session.expires_at <= _now():
+            sessions.pop(session_id, None)
+            save_sessions()
+            raise SessionExpiredError("Viewer session has expired.")
+        _verify_viewer_token(session, token)
+        return session
 
 
 def get_session_config(session_id: str, token: str) -> dict[str, Any]:
