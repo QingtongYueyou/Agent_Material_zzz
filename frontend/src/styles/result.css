@@ -269,7 +269,8 @@
 }
 
 /* Streaming cursor */
-.message.streaming .markdown-body::after {
+.message.streaming .markdown-body::after,
+.answer-card.streaming .markdown-body::after {
   content: "";
   display: inline-block;
   width: 6px;

@@ -45,7 +45,7 @@ export function ChatPanel({ messages, running, viz, onSubmit }: ChatPanelProps) 
         {hasResult ? (
           <div className="result-chat-content">
             {lastUserMessage ? <div className="result-question">{lastUserMessage.content}</div> : null}
-            <article className="answer-card">
+            <article className={`answer-card${lastAssistantMessage?.streaming ? " streaming" : ""}`}>
               <div className="markdown-body">
                 <Markdown>{lastAssistantMessage?.content ?? "结构数据已生成，可在中间区域查看可视化结果，并在右侧核对执行轨迹与数据来源。"}</Markdown>
               </div>

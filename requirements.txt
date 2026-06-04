@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic
+pandas
+pymatgen
+mp-api
+agno
+httpx
+pytest
