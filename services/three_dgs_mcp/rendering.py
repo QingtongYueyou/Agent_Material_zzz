@@ -9,7 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 from typing import Any
 from urllib.parse import quote
 
@@ -62,7 +62,7 @@ class SessionTokenError(PermissionError):
 
 
 sessions: dict[str, RenderSession] = {}
-_SESSION_LOCK = Lock()
+_SESSION_LOCK = RLock()
 
 
 def _now() -> float:
