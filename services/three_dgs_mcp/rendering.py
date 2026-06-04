@@ -332,6 +332,7 @@ def create_render(filename: str, quality: str = DEFAULT_QUALITY, ttl_sec: int | 
         )
         prune_expired_sessions(already_loaded=True)
         sessions[session_id] = session
+        save_fn()
         return session_response(session, viewer_token)
 
     return _atomic_session_update(_create)
