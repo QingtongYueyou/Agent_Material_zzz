@@ -159,3 +159,16 @@ Relevant environment variables:
 - `full`: `quality`, `--max-sh=3`, chunked `.rad`
 
 For very large assets, do not ship raw `.ply` files to the viewer. Build chunked `-lod.rad` files and keep `source` only for offline validation.
+
+## Phase-field 3DGS (相场 3DGS)
+
+相场(phase-field)3DGS 数据走严格子集:
+
+- 只接受 `*_gaussian.ply`(`PHASEFIELD_3DGS_SUFFIX_PATTERN` 常量)。
+- 跳过 `*_nonzero_points.ply` / `*.vtk` / `*.xyz`。
+- 默认 variant = `full`(`max_sh=3`),manifest 写入 `default_variant: "full"`。
+- Frontend 默认 `recommended_render_profile = "quality"`。
+
+完整说明见 [`docs/PHASEFIELD_3DGS_UPGRADE.md`](PHASEFIELD_3DGS_UPGRADE.md)。
+
+可以通过环境变量 `STRICT_PHASEFIELD_SOURCE=false` 关闭严格过滤,回到接受任意 `.ply` 的旧行为(用于非相场 3DGS 数据)。

@@ -105,6 +105,7 @@ class ThreeDGSMCPClientTests(unittest.TestCase):
                 "arguments": {
                     "filename": "object.ply",
                     "quality": "balanced",
+                    "render_profile": "performance",
                     "ttl_sec": 60,
                 },
             },

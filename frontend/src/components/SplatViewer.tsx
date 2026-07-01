@@ -11,9 +11,47 @@ import {
   type OrbitDrag,
 } from "../utils/splatCamera";
 
+export type RenderProfile = "performance" | "quality";
+
+const RENDER_PROFILE_PARAMS: Record<RenderProfile, {
+  lodScale: number;
+  lodSplatScale: number;
+  pixelRatio: (dpr: number) => number;
+  maxStdDev: number;
+  minSortIntervalMs: number;
+  behindFoveate: number;
+  coneFov0: number;
+  coneFov: number;
+  coneFoveate: number;
+}> = {
+  performance: {
+    lodScale: 0.5,
+    lodSplatScale: 0.5,
+    pixelRatio: () => 1,
+    maxStdDev: Math.sqrt(5),
+    minSortIntervalMs: 16,
+    behindFoveate: 0.12,
+    coneFov0: 80,
+    coneFov: 110,
+    coneFoveate: 0.3,
+  },
+  quality: {
+    lodScale: 1.0,
+    lodSplatScale: 1.0,
+    pixelRatio: (dpr: number) => Math.min(dpr || 1, 1.5),
+    maxStdDev: Math.sqrt(8),
+    minSortIntervalMs: 0,
+    behindFoveate: 0.2,
+    coneFov0: 90,
+    coneFov: 120,
+    coneFoveate: 0.4,
+  },
+};
+
 export interface SplatViewerProps {
   viz: VizData | null;
   quality: string;
+  renderProfile?: RenderProfile;
   refreshKey?: number;
 }
 
@@ -34,7 +72,7 @@ interface ViewerState {
   runId: number;
 }
 
-export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) {
+export function SplatViewer({ viz, quality, renderProfile, refreshKey = 0 }: SplatViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<ViewerState | null>(null);
   const orbitDragRef = useRef<OrbitDrag | null>(null);
@@ -62,6 +100,9 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
   const [viewerLoading, setViewerLoading] = useState(false);
   const [metricsOpen, setMetricsOpen] = useState(false);
   const [runToken, setRunToken] = useState(0);
+
+  const effectiveProfile: RenderProfile = renderProfile
+    ?? (asset?.recommended_render_profile === "quality" ? "quality" : "performance");
 
   useEffect(() => {
     let cancelled = false;
@@ -102,6 +143,12 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
   }, [metricsOpen, setInteractionEnabled]);
 
   useEffect(() => {
+    if (asset?.warnings?.length) {
+      console.warn("[SplatViewer] 3DGS asset warnings:", asset.warnings);
+    }
+  }, [asset?.warnings]);
+
+  useEffect(() => {
     if (!asset || !containerRef.current) {
       return;
     }
@@ -109,6 +156,7 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
     const currentAsset = asset;
     const container = containerRef.current;
     let disposed = false;
+    const profileParams = RENDER_PROFILE_PARAMS[effectiveProfile];
 
     function disposeCurrentViewer() {
       const viewer = viewerRef.current;
@@ -144,18 +192,18 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
       const spark = new SparkRenderer({
         renderer,
         sortRadial: true,
-        maxStdDev: currentAsset.is_large_model ? Math.sqrt(5) : Math.sqrt(8),
-        lodSplatScale: currentAsset.is_large_model ? 0.5 : 1,
-        behindFoveate: currentAsset.is_large_model ? 0.12 : 0.2,
-        coneFov0: currentAsset.is_large_model ? 80 : 90,
-        coneFov: currentAsset.is_large_model ? 110 : 120,
-        coneFoveate: currentAsset.is_large_model ? 0.3 : 0.4,
-        minSortIntervalMs: currentAsset.is_large_model ? 16 : 0,
+        maxStdDev: profileParams.maxStdDev,
+        lodSplatScale: profileParams.lodSplatScale,
+        behindFoveate: profileParams.behindFoveate,
+        coneFov0: profileParams.coneFov0,
+        coneFov: profileParams.coneFov,
+        coneFoveate: profileParams.coneFoveate,
+        minSortIntervalMs: profileParams.minSortIntervalMs,
       } as ConstructorParameters<typeof SparkRenderer>[0]);
       const controls = new SparkControls({ canvas: renderer.domElement });
       (controls as unknown as { scrollSpeed: number }).scrollSpeed = 6e-2;
 
-      renderer.setPixelRatio(currentAsset.is_large_model ? 1 : Math.min(window.devicePixelRatio || 1, 1.5));
+      renderer.setPixelRatio(profileParams.pixelRatio(window.devicePixelRatio));
       renderer.domElement.className = "splat-canvas";
       renderer.domElement.style.width = "100%";
       renderer.domElement.style.height = "100%";
@@ -253,7 +301,7 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
         url: absoluteApiUrl(currentAsset.model_url),
         lod: currentAsset.enable_lod,
         enableLod: currentAsset.enable_lod ? true : undefined,
-        lodScale: currentAsset.is_large_model ? 0.5 : 1,
+        lodScale: profileParams.lodScale,
         paged: currentAsset.enable_paged,
         onProgress: (event: ProgressEvent) => {
           if (event.lengthComputable && event.total > 0) {
@@ -412,6 +460,7 @@ export function SplatViewer({ viz, quality, refreshKey = 0 }: SplatViewerProps) 
   }, [
     armInteractionMeasurement,
     asset,
+    effectiveProfile,
     maybeRecordInteraction,
     recordRenderFirstFrame,
     resetFps,

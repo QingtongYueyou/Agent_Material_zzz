@@ -16,6 +16,7 @@ class McpRenderRequest(BaseModel):
 class ThreeDGSRenderRequest(BaseModel):
     filename: str = Field(..., min_length=1)
     quality: str = "auto"
+    render_profile: str = "performance"
 
 
 class MetricRequest(BaseModel):

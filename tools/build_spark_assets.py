@@ -18,11 +18,22 @@ DEFAULT_PIPELINE_DIR = DEFAULT_SPLAT_DIR / "_pipeline"
 STATUS_FILE_NAME = "spark_asset_pipeline_status.json"
 RAW_SOURCE_SUFFIXES = {".ply", ".spz", ".splat", ".ksplat"}
 BUILDABLE_SOURCE_SUFFIXES = {".ply", ".spz"}
+# Phase-field 3DGS source-file pattern. Files whose stem contains
+# ``_gaussian`` are treated as phase-field Gaussian splats and get the
+# special ``full``-first variant order.
+PHASEFIELD_3DGS_SUFFIX_PATTERN = "_gaussian"
+# ``*_nonzero_points.ply`` files are dense point-cloud exports, NOT 3DGS.
+NON_GAUSSIAN_POINT_CLOUD_MARKER = "nonzero_points"
+# Toggle the strict phase-field filter via ``STRICT_PHASEFIELD_SOURCE``.
+# Default ``False`` (relaxed) — any non-point-cloud ``.ply`` is accepted as
+# a normal 3DGS source. Set to ``true`` to restrict to ``*_gaussian.ply``.
+_STRICT_PHASEFIELD_ENV = (os.getenv("STRICT_PHASEFIELD_SOURCE", "false") or "false").strip().lower()
+STRICT_PHASEFIELD_SOURCE = _STRICT_PHASEFIELD_ENV in {"1", "true", "yes", "on"}
 
 VARIANT_PROFILES = {
-    "preview": {"method": "quick", "max_sh": 0, "chunked": True},
-    "balanced": {"method": "quality", "max_sh": 1, "chunked": True},
-    "full": {"method": "quality", "max_sh": 3, "chunked": True},
+    "preview":  {"method": "quick",   "max_sh": 0, "chunked": True,  "suitable_for": "preview"},
+    "balanced": {"method": "quality", "max_sh": 1, "chunked": True,  "suitable_for": "balanced"},
+    "full":     {"method": "quality", "max_sh": 3, "chunked": True,  "suitable_for": "phase_field_gaussian"},  # 相场 3DGS 推荐
 }
 
 
@@ -211,7 +222,23 @@ def _is_source_candidate(path: Path) -> bool:
         return False
 
     lower_stem = path.stem.lower()
-    return not lower_stem.endswith("-lod")
+    if lower_stem.endswith("-lod"):
+        return False
+
+    # Phase-field 3DGS filtering (mirrors ``core/spark_asset_ingest``).
+    # ``*_nonzero_points.ply`` is a dense point-cloud export from the
+    # phase-field solver, NOT a 3DGS renderable splat. Always skipped.
+    if suffix == ".ply" and NON_GAUSSIAN_POINT_CLOUD_MARKER in lower_stem:
+        return False
+
+    # Optional strict mode: when enabled, restrict to ``*_gaussian.ply``.
+    # Default relaxed so existing non-phase-field 3DGS datasets continue
+    # to ingest without flipping an env var.
+    if STRICT_PHASEFIELD_SOURCE and suffix == ".ply":
+        if PHASEFIELD_3DGS_SUFFIX_PATTERN.lower() not in lower_stem:
+            return False
+
+    return True
 
 
 def _iter_source_candidates(splat_dir: Path) -> list[Path]:
@@ -528,6 +555,10 @@ def _build_lod_variant(args: argparse.Namespace) -> None:
     print(f"Built Spark LoD variant '{args.variant}'")
     print(f"Manifest: {manifest_path}")
     print(f"Header:   {target_header}")
+    # Phase-field Gaussian splats benefit from the full SH degree (3). The
+    # ``full`` profile is therefore the recommended default for these assets.
+    if (PHASEFIELD_3DGS_SUFFIX_PATTERN.lower() in input_path.stem.lower()):
+        print("Recommended default variant for phase-field Gaussian splats: 'full'.")
 
 
 def _register_existing_variant(args: argparse.Namespace) -> None:
@@ -589,16 +620,80 @@ def _register_source_variant(args: argparse.Namespace) -> None:
     print(f"Manifest: {manifest_path}")
 
 
+def _resolve_variants_for_source(
+    source_path: Path,
+    requested_variants: list[str],
+    *,
+    user_explicit: bool = False,
+) -> list[str]:
+    """Determine the ordered list of variants to process for ``source_path``.
+
+    Parameters
+    ----------
+    source_path:
+        The candidate source file. Used only to detect phase-field
+        ``*_gaussian`` files when no explicit variants were requested.
+    requested_variants:
+        The candidate list of variants to build.
+    user_explicit:
+        ``True`` when the operator actually passed ``--variant`` on the
+        command line. When ``True``, ``requested_variants`` is returned
+        verbatim — phase-field preferred ordering must NEVER silently
+        override an explicit user request. When ``False`` (the default,
+        e.g. the operator did not pass any ``--variant``), phase-field
+        ``*_gaussian`` assets get the recommended
+        ``["full", "balanced", "preview"]`` order so the most detailed
+        LoD is produced first; other assets preserve
+        ``requested_variants``.
+    """
+    if user_explicit:
+        return list(requested_variants)
+    stem_lower = source_path.stem.lower()
+    is_phase_field = PHASEFIELD_3DGS_SUFFIX_PATTERN.lower() in stem_lower
+    if is_phase_field:
+        return ["full", "balanced", "preview"]
+    return list(requested_variants)
+
+
+def _resolve_default_variant_for_source(source_path: Path, explicit_default: str | None) -> str:
+    """Decide which variant to record as ``default_variant`` in the manifest."""
+    if explicit_default:
+        return explicit_default
+    stem_lower = source_path.stem.lower()
+    if PHASEFIELD_3DGS_SUFFIX_PATTERN.lower() in stem_lower:
+        return "full"
+    return ""
+
+
 def _sync_splat_dir(args: argparse.Namespace) -> None:
     splat_dir = Path(args.splat_dir).resolve()
     _ensure_layout_dirs(splat_dir)
     spark_root = Path(args.spark_root).resolve() if args.spark_root else None
     can_build = spark_root is not None and spark_root.exists()
     status_path = _status_file_path(splat_dir)
+    # ``--variant`` uses ``action="append"`` with ``default=None`` so user-
+    # supplied ``--variant preview --variant full`` is preserved exactly.
+    # When the user omits the flag, fall back to the legacy single variant.
+    # ``user_explicit`` is propagated to ``_resolve_variants_for_source`` so
+    # the phase-field preferred ordering only kicks in when the operator
+    # DID NOT pass an explicit variant list.
+    raw_variants = getattr(args, "variant", None)
+    user_explicit = raw_variants is not None
+    if raw_variants is None:
+        requested_variants: list[str] = ["balanced"]
+    elif isinstance(raw_variants, list):
+        requested_variants = [v for v in raw_variants if v]
+    else:
+        requested_variants = [raw_variants]
+    if not requested_variants:
+        requested_variants = ["balanced"]
+        user_explicit = False
+
     status: dict[str, object] = {
         "schema_version": 1,
         "running": True,
-        "variant": args.variant,
+        "variant": requested_variants[0],
+        "variants": list(requested_variants),
         "spark_root": str(spark_root) if spark_root is not None else "",
         "started_at_utc": _timestamp_utc(),
         "assets": {},
@@ -609,6 +704,7 @@ def _sync_splat_dir(args: argparse.Namespace) -> None:
             "up_to_date": 0,
             "pending_build": 0,
             "errors": 0,
+            "per_variant": {},
         },
     }
     _save_status_file(status_path, status)
@@ -617,6 +713,8 @@ def _sync_splat_dir(args: argparse.Namespace) -> None:
     summary = status["summary"]
     if isinstance(summary, dict):
         summary["source_count"] = len(source_files)
+
+    register_source_only = bool(getattr(args, "register_source_only", False))
 
     try:
         for source_path in source_files:
@@ -628,17 +726,20 @@ def _sync_splat_dir(args: argparse.Namespace) -> None:
                 not manifest_path.exists()
                 or not _source_variant_matches(manifest_path, source_path)
             )
-            needs_variant_build = (
-                buildable
-                and can_build
-                and not _variant_is_current(manifest_path, source_path, args.variant)
+            explicit_default = getattr(args, "default_variant", None) or None
+            asset_default_variant = _resolve_default_variant_for_source(source_path, explicit_default)
+            variants_for_source = _resolve_variants_for_source(
+                source_path,
+                requested_variants,
+                user_explicit=user_explicit,
             )
 
-            status_asset = {
+            status_asset: dict[str, object] = {
                 "source_file": source_path.name,
                 "source_mtime": int(source_path.stat().st_mtime),
                 "buildable": buildable,
-                "variant": args.variant,
+                "variants": variants_for_source,
+                "variant_states": {},
                 "state": "scanning",
                 "message": "",
                 "updated_at_utc": _timestamp_utc(),
@@ -649,37 +750,95 @@ def _sync_splat_dir(args: argparse.Namespace) -> None:
             _save_status_file(status_path, status)
 
             try:
-                if needs_variant_build:
-                    status_asset["state"] = "building"
-                    status_asset["message"] = f"Building {args.variant} variant"
-                    status_asset["updated_at_utc"] = _timestamp_utc()
-                    _save_status_file(status_path, status)
+                if register_source_only:
+                    # Register the source file only; skip all LoD builds.
+                    if needs_source_registration:
+                        register_args = argparse.Namespace(
+                            input=str(source_path),
+                            asset_id=asset_id,
+                            manifest=str(manifest_path),
+                            splat_dir=str(splat_dir),
+                            set_default=bool(asset_default_variant == "source"),
+                        )
+                        _register_source_variant(register_args)
+                        status_asset["state"] = "registered"
+                        status_asset["message"] = "Source variant registered (--register-source-only)"
+                        if isinstance(summary, dict):
+                            summary["registered"] = int(summary.get("registered", 0)) + 1
+                    else:
+                        status_asset["state"] = "up_to_date"
+                        status_asset["message"] = "Source variant already registered"
+                        if isinstance(summary, dict):
+                            summary["up_to_date"] = int(summary.get("up_to_date", 0)) + 1
+                elif buildable and can_build:
+                    built_any = False
+                    for variant_name in variants_for_source:
+                        if _variant_is_current(manifest_path, source_path, variant_name):
+                            status_asset["variant_states"][variant_name] = "up_to_date"
+                            if isinstance(summary, dict):
+                                summary["up_to_date"] = int(summary.get("up_to_date", 0)) + 1
+                            if isinstance(summary, dict):
+                                per_variant = summary.get("per_variant")
+                                if isinstance(per_variant, dict):
+                                    bucket = per_variant.setdefault(variant_name, {"built": 0, "up_to_date": 0, "errors": 0})
+                                    bucket["up_to_date"] = int(bucket.get("up_to_date", 0)) + 1
+                            continue
+                        status_asset["state"] = "building"
+                        status_asset["message"] = f"Building {variant_name} variant"
+                        status_asset["updated_at_utc"] = _timestamp_utc()
+                        _save_status_file(status_path, status)
 
-                    build_args = argparse.Namespace(
-                        input=str(source_path),
-                        asset_id=asset_id,
-                        variant=args.variant,
-                        spark_root=str(spark_root),
-                        manifest=str(manifest_path),
-                        splat_dir=str(splat_dir),
-                        method=None,
-                        max_sh=None,
-                        chunked=None,
-                        set_default=True,
-                        register_source=True,
-                    )
-                    _build_lod_variant(build_args)
-                    status_asset["state"] = "built"
-                    status_asset["message"] = f"Built {args.variant} variant"
-                    if isinstance(summary, dict):
-                        summary["built"] = int(summary.get("built", 0)) + 1
+                        build_args = argparse.Namespace(
+                            input=str(source_path),
+                            asset_id=asset_id,
+                            variant=variant_name,
+                            spark_root=str(spark_root),
+                            manifest=str(manifest_path),
+                            splat_dir=str(splat_dir),
+                            method=None,
+                            max_sh=None,
+                            chunked=None,
+                            # Only the chosen default variant is set as default in the manifest.
+                            set_default=(variant_name == asset_default_variant),
+                            register_source=True,
+                        )
+                        try:
+                            _build_lod_variant(build_args)
+                        except Exception as build_exc:  # noqa: BLE001
+                            status_asset["variant_states"][variant_name] = "error"
+                            if isinstance(summary, dict):
+                                summary["errors"] = int(summary.get("errors", 0)) + 1
+                                per_variant = summary.get("per_variant")
+                                if isinstance(per_variant, dict):
+                                    bucket = per_variant.setdefault(variant_name, {"built": 0, "up_to_date": 0, "errors": 0})
+                                    bucket["errors"] = int(bucket.get("errors", 0)) + 1
+                            raise
+                        status_asset["variant_states"][variant_name] = "built"
+                        built_any = True
+                        if isinstance(summary, dict):
+                            summary["built"] = int(summary.get("built", 0)) + 1
+                            per_variant = summary.get("per_variant")
+                            if isinstance(per_variant, dict):
+                                bucket = per_variant.setdefault(variant_name, {"built": 0, "up_to_date": 0, "errors": 0})
+                                bucket["built"] = int(bucket.get("built", 0)) + 1
+
+                    if not built_any and all(
+                        status_asset["variant_states"].get(v) == "up_to_date"
+                        for v in variants_for_source
+                    ):
+                        status_asset["state"] = "up_to_date"
+                        status_asset["message"] = "All requested variants already up to date"
+                    elif built_any:
+                        status_asset["state"] = "built"
+                        status_asset["message"] = f"Built variants: {', '.join(v for v, s in status_asset['variant_states'].items() if s == 'built')}"
                 elif needs_source_registration:
                     register_args = argparse.Namespace(
                         input=str(source_path),
                         asset_id=asset_id,
                         manifest=str(manifest_path),
                         splat_dir=str(splat_dir),
-                        set_default=not _variant_is_current(manifest_path, source_path, args.variant),
+                        set_default=(not _variant_is_current(manifest_path, source_path, requested_variants[0]))
+                        and not asset_default_variant,
                     )
                     _register_source_variant(register_args)
                     status_asset["state"] = "registered"
@@ -806,8 +965,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sync_assets.add_argument(
         "--variant",
-        default="balanced",
-        help="Variant name to auto-build for new or changed assets.",
+        action="append",
+        default=None,
+        help="Variant name(s) to auto-build. May be passed multiple times, e.g. --variant preview --variant full. "
+             "When omitted, defaults to ['balanced'] (or ['full','balanced','preview'] for phase-field _gaussian sources).",
+    )
+    sync_assets.add_argument(
+        "--default-variant",
+        default="",
+        help="Explicitly set the manifest's default_variant. Phase-field _gaussian sources default to 'full' when this is empty.",
+    )
+    sync_assets.add_argument(
+        "--register-source-only",
+        action="store_true",
+        help="Only register the source variant; do not build any LoD variants.",
     )
     sync_assets.set_defaults(handler=_sync_splat_dir)
 

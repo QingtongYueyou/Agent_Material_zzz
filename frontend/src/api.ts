@@ -132,12 +132,17 @@ export async function renderMcp(cifPath: string): Promise<McpRenderResponse> {
 export async function renderThreeDgs(
   filename: string,
   quality?: string,
+  renderProfile?: string,
   signal?: AbortSignal,
 ): Promise<ThreeDgsRenderResponse> {
   const response = await fetch(apiUrl("/api/3dgs/render"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filename, quality }),
+    body: JSON.stringify({
+      filename,
+      quality,
+      render_profile: renderProfile || "performance",
+    }),
     signal,
   });
   if (!response.ok) {

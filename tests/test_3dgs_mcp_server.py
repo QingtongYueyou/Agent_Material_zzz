@@ -172,11 +172,38 @@ class ThreeDGSRenderingTests(unittest.TestCase):
         self.assertEqual(resolved, self.rendering.resolve_asset_relative_path(chunk_path.as_posix()))
         self.assertEqual(forbidden.exception.status_code, 403)
 
+    def test_viewer_cookie_allows_paged_rad_chunk_without_query_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            session_file = Path(tmp) / "3dgs_sessions.json"
+            with patch.object(self.rendering, "THREEDGS_SESSION_FILE", session_file):
+                result = self.rendering.create_render("object.ply", quality="auto", ttl_sec=120)
+                parsed = urlparse(result["render_url"])
+                relative_path = Path(result["asset"]["relative_path"])
+                rad_path = self.rendering.resolve_asset_relative_path(relative_path.as_posix())
+                chunk_name = next(iter(self.rendering._rad_chunk_filenames(rad_path)))
+                chunk_path = relative_path.with_name(chunk_name)
+                client = TestClient(server.app)
+
+                page = client.get(f"{parsed.path}?{parsed.query}")
+                chunk = client.get(
+                    f"/viewer/sessions/{result['session_id']}/assets/{chunk_path.as_posix()}"
+                )
+
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(chunk.status_code, 200)
+        self.assertEqual(chunk.content[:4], b"RADC")
+
 
 class ThreeDGSMCPProtocolTests(unittest.TestCase):
     def setUp(self) -> None:
         server._MCP_SESSIONS.clear()
+        self.auth_patch = patch.object(server, "THREEDGS_MCP_API_KEY", "")
+        self.auth_patch.start()
         self.client = TestClient(server.app)
+
+    def tearDown(self) -> None:
+        self.auth_patch.stop()
+        server._MCP_SESSIONS.clear()
 
     def _initialize(self) -> str:
         response = self.client.post(
@@ -217,6 +244,42 @@ class ThreeDGSMCPProtocolTests(unittest.TestCase):
     def test_initialize_returns_capabilities_and_session_header(self) -> None:
         session_id = self._initialize()
         self.assertIn(session_id, server._MCP_SESSIONS)
+
+    def test_client_protocol_can_initialize_and_list_tools(self) -> None:
+        client_protocol = "2024-10-07"
+        response = self.client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": "init-client-protocol",
+                "method": "initialize",
+                "params": {"protocolVersion": client_protocol, "capabilities": {}},
+            },
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["result"]["protocolVersion"], client_protocol)
+        session_id = str(response.headers["mcp-session-id"])
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": client_protocol,
+            "Mcp-Session-Id": session_id,
+        }
+
+        initialized = self.client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+            headers=headers,
+        )
+        self.assertEqual(initialized.status_code, 202)
+
+        tools = self.client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": "list-client-protocol", "method": "tools/list", "params": {}},
+            headers=headers,
+        )
+        self.assertEqual(tools.status_code, 200)
+        self.assertEqual(tools.json()["result"]["tools"][0]["name"], "3dgs.create_render")
 
     def test_tools_call_requires_initialized_session(self) -> None:
         session_id = self._initialize()

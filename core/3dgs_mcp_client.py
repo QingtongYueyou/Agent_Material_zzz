@@ -229,6 +229,7 @@ def create_render(
     filename: str,
     *,
     quality: str = "auto",
+    render_profile: str = "performance",
     ttl_sec: int | None = None,
 ) -> dict[str, Any]:
     if not filename.strip():
@@ -237,6 +238,7 @@ def create_render(
     arguments: dict[str, Any] = {
         "filename": filename.strip(),
         "quality": (quality or "auto").strip() or "auto",
+        "render_profile": (render_profile or "performance").strip() or "performance",
     }
     if ttl_sec is not None:
         arguments["ttl_sec"] = int(ttl_sec)

@@ -88,6 +88,7 @@ def _build_asset_record(
     selection_note: str,
     enable_lod: bool | None = None,
     enable_paged: bool | None = None,
+    bundle_size_bytes: int | None = None,
 ) -> dict[str, Any] | None:
     url_path = _safe_relative_to_base(path)
     if url_path is None:
@@ -95,9 +96,17 @@ def _build_asset_record(
 
     model_format = path.suffix.lstrip(".").lower()
     vertex_count = get_ply_vertex_count(path)
-    file_size_bytes = path.stat().st_size
+    header_file_size_bytes = path.stat().st_size
+    # For chunked `.rad` variants the manifest already records
+    # `bundle_size_bytes` (header + all `.radc` chunks). On-disk `.rad`
+    # headers are usually small even when the real payload is hundreds of
+    # MB to multi-GB; we MUST use the bundle size for any size-based
+    # decision (large-model classification, warnings, UI protections).
+    effective_file_size_bytes = (
+        bundle_size_bytes if bundle_size_bytes is not None else header_file_size_bytes
+    )
     is_large_model = (
-        file_size_bytes >= 100 * 1024 * 1024
+        effective_file_size_bytes >= 100 * 1024 * 1024
         or (vertex_count is not None and vertex_count >= 1_000_000)
     )
 
@@ -113,6 +122,30 @@ def _build_asset_record(
     else:
         lod_mode_label = "full detail"
 
+    # Recommended quality / render profile based on the BUNDLE size, not
+    # just the header. Heavier assets benefit from the full SH degree +
+    # quality rendering path; smaller assets are best served by the
+    # performance-oriented path.
+    if is_large_model:
+        recommended_quality = "full"
+        recommended_render_profile = "quality"
+    else:
+        recommended_quality = "balanced"
+        recommended_render_profile = "performance"
+
+    # Non-blocking warnings attached to the record. They are optional and
+    # additive so existing JSON consumers keep working unchanged.
+    # Thresholds apply to the BUNDLE size so 1GB chunked rad assets still
+    # trigger protection even when the .rad header is tiny.
+    warnings: list[str] = []
+    if effective_file_size_bytes >= 1024 * 1024 * 1024:
+        warnings.append("source file is very large; direct browser loading is disabled")
+    elif effective_file_size_bytes >= 300 * 1024 * 1024:
+        warnings.append("source file is large; recommended to use a built variant")
+    lower_name = path.name.lower()
+    if "nonzero_points" in lower_name:
+        warnings.append("this is a point cloud file; not a 3DGS renderable splat")
+
     return {
         "asset_id": asset_id,
         "variant_name": variant_name,
@@ -125,13 +158,35 @@ def _build_asset_record(
         "model_format": model_format,
         "vertex_count": vertex_count,
         "vertex_count_label": "unknown" if vertex_count is None else str(vertex_count),
-        "file_size_bytes": file_size_bytes,
+        "file_size_bytes": effective_file_size_bytes,
+        "header_file_size_bytes": header_file_size_bytes,
+        "bundle_size_bytes": bundle_size_bytes,
         "file_mtime": int(path.stat().st_mtime),
         "is_large_model": is_large_model,
         "enable_lod": enable_lod,
         "enable_paged": enable_paged,
         "lod_mode_label": lod_mode_label,
+        "recommended_quality": recommended_quality,
+        "recommended_render_profile": recommended_render_profile,
+        "warnings": warnings,
     }
+
+
+def _resolve_direct_bundle_size(path: Path) -> int | None:
+    """Look up .radc chunks next to a .rad header and sum their sizes.
+
+    Direct (manifest-less) `.rad` assets still benefit from this so the UI
+    can warn about real bundle size, not just the header.
+    """
+    if path.suffix.lower() != ".rad" or not path.exists():
+        return None
+    chunks = sorted(path.parent.glob(f"{path.stem}-*.radc"))
+    if not chunks:
+        return None
+    try:
+        return path.stat().st_size + sum(chunk.stat().st_size for chunk in chunks)
+    except OSError:
+        return None
 
 
 def _select_manifest_asset(manifest_path: Path, quality_preference: str) -> dict[str, Any] | None:
@@ -150,7 +205,7 @@ def _select_manifest_asset(manifest_path: Path, quality_preference: str) -> dict
         selection_order.append(requested_quality)
 
     default_variant = str(manifest.get("default_variant") or "").strip()
-    for name in [default_variant, "balanced", "preview", "full", "source"]:
+    for name in [default_variant, "full", "balanced", "preview", "source"]:
         if name and name not in selection_order:
             selection_order.append(name)
 
@@ -177,6 +232,15 @@ def _select_manifest_asset(manifest_path: Path, quality_preference: str) -> dict
                 f"Requested quality '{requested_quality}' unavailable; using '{variant_name}'"
             )
 
+        bundle_size_raw = payload.get("bundle_size_bytes")
+        bundle_size_bytes: int | None = None
+        if isinstance(bundle_size_raw, (int, float)) and bundle_size_raw > 0:
+            bundle_size_bytes = int(bundle_size_raw)
+        elif resolved_path.suffix.lower() == ".rad":
+            # Manifest didn't record bundle_size_bytes (older build); recover
+            # by summing sibling .radc chunks so size warnings still trigger.
+            bundle_size_bytes = _resolve_direct_bundle_size(resolved_path)
+
         asset_record = _build_asset_record(
             resolved_path,
             asset_id=asset_id,
@@ -186,6 +250,7 @@ def _select_manifest_asset(manifest_path: Path, quality_preference: str) -> dict
             selection_note=selection_note,
             enable_lod=bool(payload.get("lod")) if "lod" in payload else None,
             enable_paged=bool(payload.get("paged")) if "paged" in payload else None,
+            bundle_size_bytes=bundle_size_bytes,
         )
         if asset_record is None:
             continue
@@ -225,6 +290,7 @@ def _resolve_direct_asset(filename: str) -> dict[str, Any] | None:
                     source_kind="direct",
                     manifest_name=None,
                     selection_note=f"No manifest found; using direct asset '{candidate.name}'",
+                    bundle_size_bytes=_resolve_direct_bundle_size(candidate),
                 )
 
         for root in _direct_asset_roots():
@@ -238,6 +304,7 @@ def _resolve_direct_asset(filename: str) -> dict[str, Any] | None:
                         source_kind="direct",
                         manifest_name=None,
                         selection_note=f"No manifest found; using glob match '{matches[0].name}'",
+                        bundle_size_bytes=_resolve_direct_bundle_size(matches[0]),
                     )
 
     return None
@@ -253,4 +320,10 @@ def resolve_splat_asset(filename: str, quality_preference: str = "auto") -> dict
             if asset_record is not None:
                 return asset_record
 
-    return _resolve_direct_asset(filename)
+    direct_record = _resolve_direct_asset(filename)
+    # TODO(future-task): when ``variant_name == "source"`` and
+    # ``file_size_bytes >= 1GB``, suppress direct browser loading by returning
+    # ``None`` here and surfacing a warning through the API layer. The manifest
+    # path already short-circuits via ``_select_manifest_asset``; this branch
+    # only affects assets that bypass the manifest.
+    return direct_record

@@ -268,6 +268,72 @@
   border-top: 1px solid #d8ddff;
 }
 
+.thought-disclosure {
+  margin: 0 0 8px;
+  border: 1px solid rgba(203, 215, 250, 0.96);
+  border-radius: 8px;
+  background: rgba(247, 250, 255, 0.92);
+  overflow: hidden;
+}
+
+.thought-disclosure summary {
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  color: #26386c;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.thought-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.thought-disclosure summary::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid #64719e;
+  border-bottom: 2px solid #64719e;
+  transform: rotate(-45deg);
+  transition: transform 160ms ease;
+}
+
+.thought-disclosure[open] summary::before {
+  transform: rotate(45deg);
+}
+
+.thought-disclosure summary span {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.thought-disclosure summary small {
+  color: #7280ad;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.thought-body {
+  max-height: 260px;
+  padding: 0 10px 10px 27px;
+  color: #53618e;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-y: auto;
+}
+
+.thought-body p,
+.thought-body ul,
+.thought-body ol {
+  margin-top: 0;
+}
+
 /* Streaming cursor */
 .message.streaming .markdown-body::after,
 .answer-card.streaming .markdown-body::after {

@@ -185,6 +185,9 @@ def splat_asset(
         "enable_paged": asset["enable_paged"],
         "lod_mode_label": asset["lod_mode_label"],
         "view_bounds": asset.get("view_bounds"),
+        "recommended_quality": asset.get("recommended_quality"),
+        "recommended_render_profile": asset.get("recommended_render_profile"),
+        "warnings": asset.get("warnings") or [],
     }
 
 
@@ -247,7 +250,11 @@ def three_dgs_render(request: ThreeDGSRenderRequest) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="3DGS MCP rendering is disabled.")
 
     try:
-        return create_3dgs_render(request.filename, quality=request.quality)
+        return create_3dgs_render(
+            request.filename,
+            quality=request.quality,
+            render_profile=request.render_profile,
+        )
     except ThreeDGSMCPClientError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

@@ -10,6 +10,11 @@ interface ChatPanelProps {
   onSubmit: (query: string) => void;
 }
 
+interface ParsedAssistantContent {
+  answer: string;
+  thoughts: string[];
+}
+
 export function ChatPanel({ messages, running, viz, onSubmit }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
@@ -47,7 +52,7 @@ export function ChatPanel({ messages, running, viz, onSubmit }: ChatPanelProps) 
             {lastUserMessage ? <div className="result-question">{lastUserMessage.content}</div> : null}
             <article className={`answer-card${lastAssistantMessage?.streaming ? " streaming" : ""}`}>
               <div className="markdown-body">
-                <Markdown>{lastAssistantMessage?.content ?? "结构数据已生成，可在中间区域查看可视化结果，并在右侧核对执行轨迹与数据来源。"}</Markdown>
+                <AssistantContent content={lastAssistantMessage?.content ?? "结构数据已生成，可在中间区域查看可视化结果，并在右侧核对执行轨迹与数据来源。"} />
               </div>
             </article>
           </div>
@@ -77,7 +82,7 @@ export function ChatPanel({ messages, running, viz, onSubmit }: ChatPanelProps) 
               <article key={message.id} className={`message ${message.role}${message.streaming ? " streaming" : ""}`}>
                 <div className="message-role">{message.role === "user" ? "你" : "材料分析助手"}</div>
                 {message.role === "assistant" ? (
-                  <div className="markdown-body"><Markdown>{message.content}</Markdown></div>
+                  <div className="markdown-body"><AssistantContent content={message.content} /></div>
                 ) : (
                   <p>{message.content}</p>
                 )}
@@ -105,4 +110,46 @@ export function ChatPanel({ messages, running, viz, onSubmit }: ChatPanelProps) 
       </form>
     </section>
   );
+}
+
+function AssistantContent({ content }: { content: string }) {
+  const { answer, thoughts } = parseAssistantContent(content);
+
+  return (
+    <>
+      {thoughts.map((thought, index) => (
+        <details className="thought-disclosure" key={`${index}-${thought.slice(0, 24)}`}>
+          <summary>
+            <span>思考过程</span>
+            <small>点击展开</small>
+          </summary>
+          <div className="thought-body">
+            <Markdown>{thought}</Markdown>
+          </div>
+        </details>
+      ))}
+      {answer.trim() ? <Markdown>{answer}</Markdown> : null}
+    </>
+  );
+}
+
+function parseAssistantContent(content: string): ParsedAssistantContent {
+  const thoughts: string[] = [];
+  let answer = "";
+  let cursor = 0;
+  const thinkBlockPattern = /<think>([\s\S]*?)(?:<\/think>|$)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = thinkBlockPattern.exec(content)) !== null) {
+    answer += content.slice(cursor, match.index);
+    thoughts.push(match[1].trim());
+    cursor = match.index + match[0].length;
+  }
+
+  answer += content.slice(cursor);
+
+  return {
+    answer: answer.trim(),
+    thoughts: thoughts.filter(Boolean)
+  };
 }

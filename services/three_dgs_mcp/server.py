@@ -26,7 +26,6 @@ VIEWER_DIST_DIR = VIEWER_DIR / "dist"
 VIEWER_INDEX_HTML = VIEWER_DIST_DIR / "index.html"
 VIEWER_ASSETS_DIR = VIEWER_DIST_DIR / "assets"
 MCP_PROTOCOL_VERSION = "2025-06-18"
-SUPPORTED_PROTOCOL_VERSIONS = {MCP_PROTOCOL_VERSION, "2025-03-26"}
 MCP_SESSION_TTL_SEC = 3600
 _MCP_SESSIONS: dict[str, dict[str, Any]] = {}
 _MCP_SESSION_LOCK = Lock()
@@ -84,6 +83,11 @@ def _tool_spec() -> dict[str, Any]:
                     "type": "string",
                     "enum": ["auto", "preview", "balanced", "full", "source"],
                     "default": rendering.DEFAULT_QUALITY,
+                },
+                "render_profile": {
+                    "type": "string",
+                    "enum": ["performance", "quality"],
+                    "default": rendering.DEFAULT_RENDER_PROFILE,
                 },
                 "ttl_sec": {"type": "integer", "minimum": 1},
             },
@@ -157,9 +161,6 @@ def _get_mcp_session(request: Request) -> tuple[str, dict[str, Any]] | JSONRespo
 
 
 def _validate_protocol_header(request: Request) -> JSONResponse | None:
-    protocol_version = request.headers.get("mcp-protocol-version") or "2025-03-26"
-    if protocol_version not in SUPPORTED_PROTOCOL_VERSIONS:
-        return _http_error(400, "Unsupported MCP-Protocol-Version.")
     return None
 
 
@@ -217,13 +218,11 @@ async def mcp_endpoint(request: Request):
 
     if method == "initialize":
         client_protocol = str(params.get("protocolVersion") or MCP_PROTOCOL_VERSION)
-        if client_protocol not in SUPPORTED_PROTOCOL_VERSIONS:
-            return _json_rpc_error(request_id, -32602, "Unsupported MCP protocol version.")
-        mcp_session_id = _create_mcp_session(MCP_PROTOCOL_VERSION)
+        mcp_session_id = _create_mcp_session(client_protocol)
         return _json_rpc_success(
             request_id,
             {
-                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "protocolVersion": client_protocol,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {
                     "name": "agent-material-3dgs",
@@ -275,6 +274,7 @@ async def mcp_endpoint(request: Request):
         result = rendering.create_render(
             str(arguments.get("filename") or ""),
             quality=str(arguments.get("quality") or rendering.DEFAULT_QUALITY),
+            render_profile=str(arguments.get("render_profile") or rendering.DEFAULT_RENDER_PROFILE),
             ttl_sec=arguments.get("ttl_sec"),
         )
     except rendering.RenderCreateError as exc:
@@ -302,6 +302,24 @@ def _session_config_script(session_id: str, token: str) -> str:
     config_url = f"/viewer/sessions/{quote(session_id, safe='')}/config?token={quote(token, safe='')}"
     payload = json.dumps(config_url).replace("</", "<\\/")
     return f'<script type="application/json" id="session-config-url">{payload}</script>'
+
+
+def _viewer_token_cookie_name(session_id: str) -> str:
+    return f"3dgs_viewer_token_{session_id}"
+
+
+def _viewer_token_from_request(request: Request, session_id: str, token: str) -> str:
+    return token or request.cookies.get(_viewer_token_cookie_name(session_id), "")
+
+
+def _set_viewer_token_cookie(response: Response, session_id: str, token: str) -> None:
+    response.set_cookie(
+        key=_viewer_token_cookie_name(session_id),
+        value=token,
+        path=f"/viewer/sessions/{quote(session_id, safe='')}",
+        httponly=True,
+        samesite="lax",
+    )
 
 
 def _viewer_unbuilt_html(session_id: str, token: str, message: str) -> str:
@@ -384,8 +402,9 @@ def _assert_viewer_session(session_id: str, token: str) -> None:
 
 
 @app.get("/viewer/sessions/{session_id}", response_class=HTMLResponse)
-def viewer_session(session_id: str, token: str = Query(default="")) -> str:
+def viewer_session(response: Response, session_id: str, token: str = Query(default="")) -> str:
     _assert_viewer_session(session_id, token)
+    _set_viewer_token_cookie(response, session_id, token)
     if not VIEWER_INDEX_HTML.exists():
         return _viewer_unbuilt_html(
             session_id,
@@ -410,9 +429,9 @@ def viewer_session(session_id: str, token: str = Query(default="")) -> str:
 
 
 @app.get("/viewer/sessions/{session_id}/config")
-def viewer_session_config(session_id: str, token: str = Query(default="")) -> dict[str, Any]:
+def viewer_session_config(request: Request, session_id: str, token: str = Query(default="")) -> dict[str, Any]:
     try:
-        return rendering.get_session_config(session_id, token)
+        return rendering.get_session_config(session_id, _viewer_token_from_request(request, session_id, token))
     except rendering.SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except rendering.SessionExpiredError as exc:
@@ -422,9 +441,20 @@ def viewer_session_config(session_id: str, token: str = Query(default="")) -> di
 
 
 @app.get("/viewer/sessions/{session_id}/assets/{relative_path:path}")
-def session_asset_file(session_id: str, relative_path: str, token: str = Query(default="")) -> FileResponse:
+def session_asset_file(
+    request: Request,
+    session_id: str,
+    relative_path: str,
+    token: str = Query(default=""),
+) -> FileResponse:
     try:
-        return FileResponse(rendering.resolve_session_asset_path(session_id, relative_path, token))
+        return FileResponse(
+            rendering.resolve_session_asset_path(
+                session_id,
+                relative_path,
+                _viewer_token_from_request(request, session_id, token),
+            )
+        )
     except rendering.AssetPathError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except rendering.SessionNotFoundError as exc:

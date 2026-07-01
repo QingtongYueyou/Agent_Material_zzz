@@ -124,4 +124,7 @@ export interface SplatAsset {
     center?: number[];
     radius?: number;
   } | null;
+  recommended_quality?: "preview" | "balanced" | "full" | "source" | null;
+  recommended_render_profile?: "performance" | "quality" | null;
+  warnings?: string[];
 }

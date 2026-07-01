@@ -24,6 +24,7 @@ from core.splat_assets import resolve_splat_asset
 
 ALLOWED_ASSET_SUFFIXES = {".ksplat", ".ply", ".rad", ".radc", ".splat", ".spz"}
 DEFAULT_QUALITY = "auto"
+DEFAULT_RENDER_PROFILE = "performance"
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,7 @@ class RenderSession:
     session_id: str
     filename: str
     quality: str
+    render_profile: str
     created_at: float
     expires_at: float
     ttl_sec: int
@@ -93,6 +95,7 @@ def _session_to_dict(session: RenderSession) -> dict[str, Any]:
         "session_id": session.session_id,
         "filename": session.filename,
         "quality": session.quality,
+        "render_profile": session.render_profile,
         "created_at": session.created_at,
         "expires_at": session.expires_at,
         "ttl_sec": session.ttl_sec,
@@ -111,6 +114,7 @@ def _session_from_dict(payload: dict[str, Any]) -> RenderSession | None:
             session_id=str(payload["session_id"]),
             filename=str(payload["filename"]),
             quality=str(payload["quality"]),
+            render_profile=str(payload.get("render_profile") or DEFAULT_RENDER_PROFILE),
             created_at=float(payload["created_at"]),
             expires_at=float(payload["expires_at"]),
             ttl_sec=int(payload["ttl_sec"]),
@@ -183,6 +187,31 @@ def resolve_asset_relative_path(relative_path: str) -> Path:
     return resolved
 
 
+def _rad_chunk_filenames(rad_path: Path) -> set[str]:
+    try:
+        text = rad_path.read_bytes().decode("utf-8", errors="ignore")
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            return set()
+        payload = json.loads(text[start : end + 1])
+    except (OSError, json.JSONDecodeError):
+        return set()
+
+    chunks = payload.get("chunks") if isinstance(payload, dict) else None
+    if not isinstance(chunks, list):
+        return set()
+
+    filenames: set[str] = set()
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        filename = chunk.get("filename")
+        if isinstance(filename, str) and filename:
+            filenames.add(Path(filename).name)
+    return filenames
+
+
 def _viewer_token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
@@ -245,6 +274,9 @@ def asset_response(asset: dict[str, Any], session_id: str, token: str) -> dict[s
         "enable_paged": asset["enable_paged"],
         "lod_mode_label": asset["lod_mode_label"],
         "view_bounds": asset.get("view_bounds"),
+        "recommended_quality": asset.get("recommended_quality"),
+        "recommended_render_profile": asset.get("recommended_render_profile"),
+        "warnings": asset.get("warnings") or [],
     }
 
 
@@ -265,6 +297,7 @@ def session_response(session: RenderSession, token: str | None = None) -> dict[s
         "source": "3dgs:mcp",
         "session_id": session.session_id,
         "render_url": render_url,
+        "render_profile": session.render_profile,
         "created_at": session.created_at,
         "expires_at": session.expires_at,
         "ttl_sec": session.ttl_sec,
@@ -296,11 +329,19 @@ def _atomic_session_update(fn: callable) -> Any:
         return result
 
 
-def create_render(filename: str, quality: str = DEFAULT_QUALITY, ttl_sec: int | None = None) -> dict[str, Any]:
+def create_render(
+    filename: str,
+    quality: str = DEFAULT_QUALITY,
+    render_profile: str = DEFAULT_RENDER_PROFILE,
+    ttl_sec: int | None = None,
+) -> dict[str, Any]:
     def _create(sessions: dict[str, RenderSession], load_fn: callable, save_fn: callable) -> dict[str, Any]:
         base_url = _public_base_url()
         lookup_name = validate_lookup_filename(filename)
         quality_name = (quality or DEFAULT_QUALITY).strip() or DEFAULT_QUALITY
+        profile_name = (render_profile or DEFAULT_RENDER_PROFILE).strip() or DEFAULT_RENDER_PROFILE
+        if profile_name not in {"performance", "quality"}:
+            raise RenderCreateError("render_profile must be 'performance' or 'quality'.")
         ttl = THREEDGS_RENDER_TTL_SEC if ttl_sec is None else int(ttl_sec)
         if ttl <= 0:
             raise RenderCreateError("ttl_sec must be a positive integer.")
@@ -323,6 +364,7 @@ def create_render(filename: str, quality: str = DEFAULT_QUALITY, ttl_sec: int | 
             session_id=session_id,
             filename=lookup_name,
             quality=quality_name,
+            render_profile=profile_name,
             created_at=created_at,
             expires_at=created_at + ttl,
             ttl_sec=ttl,
@@ -373,11 +415,13 @@ def resolve_session_asset_path(session_id: str, relative_path: str, token: str) 
     expected_suffix = expected.suffix.lower()
     if expected_suffix == ".rad" and requested_suffix in {".rad", ".radc"}:
         same_directory = requested.parent == expected.parent
+        expected_path = resolve_asset_relative_path(session_relative)
+        listed_chunk = requested_suffix == ".radc" and requested.name in _rad_chunk_filenames(expected_path)
         radc_chunk = requested_suffix == ".radc" and (
             re.fullmatch(rf"{re.escape(expected.stem)}-\d+", requested.stem) is not None
             or requested.stem.startswith(f"{expected.stem}.")
         )
-        same_prefix = requested.stem == expected.stem or radc_chunk
+        same_prefix = requested.stem == expected.stem or radc_chunk or listed_chunk
         if same_directory and same_prefix:
             return resolved
 

@@ -24,6 +24,25 @@ from config.settings import (
 
 RAW_SOURCE_SUFFIXES = {".ply", ".spz", ".splat", ".ksplat"}
 BUILDABLE_SOURCE_SUFFIXES = {".ply", ".spz"}
+# Phase-field 3DGS source-file pattern. Files whose stem contains
+# ``_gaussian`` (case-insensitive) are treated as phase-field Gaussian
+# splats and get the special ``full``-first variant order (see
+# ``_resolve_variants_for_source`` in ``tools/build_spark_assets.py``).
+# The pattern is also the strict-mode filter when ``STRICT_PHASEFIELD_SOURCE``
+# is enabled.
+PHASEFIELD_3DGS_SUFFIX_PATTERN = "_gaussian"
+# ``*_nonzero_points.ply`` files are dense point-cloud exports from the
+# phase-field solver — they are NOT 3DGS renderable splats. We always skip
+# them, regardless of strict mode.
+NON_GAUSSIAN_POINT_CLOUD_MARKER = "nonzero_points"
+# Toggle the strict phase-field filter via ``STRICT_PHASEFIELD_SOURCE``.
+# Default is ``False`` (relaxed): any ``.ply`` other than
+# ``*_nonzero_points.ply`` is ingestable as a normal 3DGS source.
+# Set to ``true``/``1``/``yes``/``on`` to restrict ingest to
+# ``*_gaussian.ply`` only (useful when ``static/splat_files/source/``
+# is shared with non-splat artefacts).
+_STRICT_PHASEFIELD_ENV = (os.getenv("STRICT_PHASEFIELD_SOURCE", "false") or "false").strip().lower()
+STRICT_PHASEFIELD_SOURCE = _STRICT_PHASEFIELD_ENV in {"1", "true", "yes", "on"}
 _PROCESS_LOCK = threading.Lock()
 _ACTIVE_PROCESS: subprocess.Popen[str] | None = None
 _LAST_LAUNCH_MONO = 0.0
@@ -45,10 +64,29 @@ def _is_source_candidate(path: Path) -> bool:
     if not path.is_file():
         return False
 
-    if path.suffix.lower() not in RAW_SOURCE_SUFFIXES:
+    suffix = path.suffix.lower()
+    if suffix not in RAW_SOURCE_SUFFIXES:
         return False
 
-    return not path.stem.lower().endswith("-lod")
+    lower_stem = path.stem.lower()
+    if lower_stem.endswith("-lod"):
+        return False
+
+    # Always skip dense point-cloud exports from the phase-field solver.
+    # These are NOT 3DGS renderable splats; loading them through Spark
+    # would either fail or produce a degenerate viewer.
+    if suffix == ".ply" and NON_GAUSSIAN_POINT_CLOUD_MARKER in lower_stem:
+        return False
+
+    # Optional strict mode: when enabled, only ``*_gaussian.ply`` files
+    # are accepted as 3DGS sources. Default is relaxed (any non-point-cloud
+    # .ply is accepted) so existing non-phase-field 3DGS datasets continue
+    # to work without flipping an env var.
+    if STRICT_PHASEFIELD_SOURCE and suffix == ".ply":
+        if PHASEFIELD_3DGS_SUFFIX_PATTERN.lower() not in lower_stem:
+            return False
+
+    return True
 
 
 def _iter_source_candidates() -> list[Path]:

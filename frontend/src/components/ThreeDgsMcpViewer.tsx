@@ -6,6 +6,7 @@ import type { ThreeDgsRenderResponse, VizData } from "../types";
 interface ThreeDgsMcpViewerProps {
   viz: VizData | null;
   quality: string;
+  renderProfile?: "performance" | "quality";
   refreshKey?: number;
 }
 
@@ -14,8 +15,8 @@ const REFRESH_SKEW_SEC = 30;
 const renderCache = new Map<string, ThreeDgsRenderResponse>();
 const evictedKeys = new Set<string>();
 
-function cacheKey(filename: string, quality: string): string {
-  return `${filename}::${quality || "auto"}`;
+function cacheKey(filename: string, quality: string, renderProfile: string): string {
+  return `${filename}::${quality || "auto"}::${renderProfile || "performance"}`;
 }
 
 function getCachedRender(key: string): ThreeDgsRenderResponse | null {
@@ -71,7 +72,7 @@ function resolveFrameUrl(renderUrl: string): string {
   }
 }
 
-export function ThreeDgsMcpViewer({ viz, quality, refreshKey = 0 }: ThreeDgsMcpViewerProps) {
+export function ThreeDgsMcpViewer({ viz, quality, renderProfile = "performance", refreshKey = 0 }: ThreeDgsMcpViewerProps) {
   const [cached, setCached] = useState<ThreeDgsRenderResponse | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -81,7 +82,10 @@ export function ThreeDgsMcpViewer({ viz, quality, refreshKey = 0 }: ThreeDgsMcpV
   const autoRefreshAttemptsRef = useRef(new Set<string>());
 
   const filename = viz?.filename ?? "";
-  const key = useMemo(() => (filename ? cacheKey(filename, quality) : ""), [filename, quality]);
+  const key = useMemo(
+    () => (filename ? cacheKey(filename, quality, renderProfile) : ""),
+    [filename, quality, renderProfile],
+  );
   const fresh = useMemo(() => isFresh(cached), [cached]);
   const renderUrl = cached?.render_url ? resolveFrameUrl(cached.render_url) : "";
 
@@ -101,7 +105,7 @@ export function ThreeDgsMcpViewer({ viz, quality, refreshKey = 0 }: ThreeDgsMcpV
       setError("");
 
       try {
-        const payload = await renderThreeDgs(filename, quality, controller.signal);
+        const payload = await renderThreeDgs(filename, quality, renderProfile, controller.signal);
         if (requestId !== requestIdRef.current || loadingKeyRef.current !== key) {
           return;
         }
@@ -125,7 +129,7 @@ export function ThreeDgsMcpViewer({ viz, quality, refreshKey = 0 }: ThreeDgsMcpV
         }
       }
     },
-    [filename, key, quality],
+    [filename, key, quality, renderProfile],
   );
 
   useEffect(() => {
