@@ -104,7 +104,7 @@ MCP_ALLOWED_UPLOAD_EXTENSIONS = {
     for extension in _csv_env(
         os.getenv(
             "MCP_ALLOWED_UPLOAD_EXTENSIONS",
-            ".cif,.xyz,.poscar,.cell,.pdb,.dat,.txt,.xls,.xlsx",
+            ".cif,.xyz,.poscar,.cell,.pdb,.dat,.txt,.xls,.xlsx,.zip,.vtp,.stl,.glb,.dump,.cfg,.data,.lmp",
         )
     )
 }
@@ -122,6 +122,20 @@ THREEDGS_PUBLIC_BASE_URL = _validate_3dgs_public_base_url(
 )
 THREEDGS_RENDER_TTL_SEC = int(os.getenv("THREEDGS_RENDER_TTL_SEC", "600"))
 THREEDGS_SESSION_FILE = SPLAT_PIPELINE_DIR / "3dgs_sessions.json"
+FILE_INTROSPECTION_CACHE_DIR = Path(
+    os.getenv("FILE_INTROSPECTION_CACHE_DIR", BASE_DIR / "static" / "file_introspection_cache")
+).expanduser()
+FILE_INTROSPECTION_MAX_FILE_SIZE_BYTES = int(os.getenv("FILE_INTROSPECTION_MAX_FILE_SIZE_BYTES", "524288"))  # 512 KB
+FILE_INTROSPECTION_DEFAULT_PREVIEW_ROWS = int(os.getenv("FILE_INTROSPECTION_DEFAULT_PREVIEW_ROWS", "40"))
+FILE_INTROSPECTION_FULLER_PREVIEW_ROWS = int(os.getenv("FILE_INTROSPECTION_FULLER_PREVIEW_ROWS", "200"))
+# Inline-cap constants are not configurable — they guard the LLM prompt budget directly.
+FILE_INTROSPECTION_INLINE_PREVIEW_ROWS = 8
+FILE_INTROSPECTION_INLINE_MAX_CHARS = 320
+# Workflow tool execution: cap concurrent tool_calls per LLM round to avoid
+# one round spawning unbounded background work when the model returns many
+# tool calls at once. Empirical cap based on observed LLM output: 2-3 calls
+# per round is the norm; 4 leaves headroom for unusual cases.
+WORKFLOW_MAX_PARALLEL_TOOLS = int(os.getenv("WORKFLOW_MAX_PARALLEL_TOOLS", "4"))
 
 
 def _resolve_spark_root() -> Path:
@@ -152,6 +166,7 @@ SPLAT_PIPELINE_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_RAW_DIR.mkdir(parents=True, exist_ok=True)
 MCP_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+FILE_INTROSPECTION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 MP_API_KEY = os.getenv("MP_API_KEY") or os.getenv("MAPI_KEY")
 POE_API_KEY = os.getenv("POE_API_KEY")

@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 import uuid
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from importlib import import_module
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
+from config.settings import WORKFLOW_MAX_PARALLEL_TOOLS
 from core.llm_client import LLMClientError, create_chat_completion
 from core.processor import get_cif_info
 from core.tools import OPENAI_TOOL_SPECS, execute_openai_tool
@@ -47,6 +50,16 @@ SYSTEM_PROMPT = (
         - 如果多个 `.txt`/`.dat` 文件用途不明确，先要求用户澄清 DOS 或 XRD。
         - PDF/DOC/JPG/PNG 第一版不直接调用 MCP 可视化工具。
         - `get_mp_structure` 返回 `generated_file_id` 时，可用它继续调用 `render_with_mcp` 做结构可视化。
+        """
+    ).strip()
+    + "\n\n"
+    + dedent(
+        """
+        文件理解约束：
+        - 第二条 system 消息里给出了每个上传文件的 file_id + 内容摘要（inferred_content_type、confidence、recommended_mcp_intents）。
+        - 当 confidence=high 时直接调用 render_with_mcp；confidence=medium 或 low 时应先调用 inspect_uploaded_file(detail_level="fuller") 获得更详细的事实，或向用户澄清。
+        - 没有上传文件但用户明确问到某材料的晶体结构、空间群、CIF 时，调用 get_mp_structure；若返回 generated_file_id，可用该 file_id 调用 render_with_mcp(intent="structure")。
+        - 不得伪造 file_id、化学式、CIF 内容、空间群或 MCP 路由。
         """
     ).strip()
 )
@@ -171,25 +184,106 @@ def _format_file_context(uploaded_files: list[dict[str, Any]]) -> str:
     if not uploaded_files:
         return ""
 
-    lines = ["用户当前可用文件："]
+    lines = ["用户当前可用文件（含内容摘要）："]
     for item in uploaded_files:
-        if item.get("error"):
-            lines.append(f"- file_id: {item.get('file_id')} (metadata error: {item.get('error')})")
+        file_id = item.get("file_id")
+        if not file_id:
             continue
-        lines.append(
-            "- file_id: {file_id}\n"
-            "  filename: {filename}\n"
-            "  extension: {extension}\n"
-            "  size_bytes: {size_bytes}\n"
-            "  source: {source}".format(
-                file_id=item.get("file_id"),
-                filename=item.get("filename"),
-                extension=item.get("extension"),
-                size_bytes=item.get("size_bytes"),
-                source=item.get("source"),
-            )
-        )
+        if item.get("error"):
+            lines.append(f"- file_id: {file_id} (metadata error: {item.get('error')})")
+            continue
+
+        block = _render_file_block(item, _summarize_for_llm(str(file_id)))
+        lines.append(block)
     return "\n".join(lines)
+
+
+def _summarize_for_llm(file_id: str) -> dict[str, Any]:
+    """Best-effort introspection of one file; never raises into the caller."""
+    try:
+        from config.settings import (
+            FILE_INTROSPECTION_INLINE_PREVIEW_ROWS,
+            FILE_INTROSPECTION_INLINE_MAX_CHARS,
+        )
+        from core import file_introspection
+
+        return file_introspection.summarize_file(file_id, detail_level="default")
+    except Exception as exc:
+        return {
+            "content_kind": "error",
+            "inferred_content_type": None,
+            "confidence": "low",
+            "recommended_mcp_intents": [],
+            "needs_clarification": False,
+            "facts": {"error": str(exc)},
+            "preview": {},
+            "warnings": [str(exc)],
+        }
+
+
+def _render_file_block(metadata: dict[str, Any], summary: dict[str, Any]) -> str:
+    """Compose a compact, capped block of metadata + summary for the LLM prompt."""
+    from config.settings import (
+        FILE_INTROSPECTION_INLINE_PREVIEW_ROWS,
+        FILE_INTROSPECTION_INLINE_MAX_CHARS,
+    )
+
+    file_id = metadata.get("file_id") or summary.get("file_id") or ""
+    filename = metadata.get("filename") or summary.get("filename") or ""
+    extension = metadata.get("extension") or summary.get("extension") or ""
+    size_bytes = metadata.get("size_bytes")
+    source = metadata.get("source") or ""
+
+    header = (
+        f"- file_id: {file_id}\n"
+        f"  filename: {filename}\n"
+        f"  extension: {extension}\n"
+        f"  size_bytes: {size_bytes}\n"
+        f"  source: {source}"
+    )
+
+    content_kind = summary.get("content_kind")
+    if content_kind in {"unsupported", "oversize", "error"}:
+        return header + "\n  summary: (summary unavailable)"
+
+    inferred = summary.get("inferred_content_type") or "unknown"
+    confidence = summary.get("confidence") or "low"
+    recommended = summary.get("recommended_mcp_intents") or []
+    needs_clarification = bool(summary.get("needs_clarification"))
+    facts = summary.get("facts") or {}
+    preview = summary.get("preview") or {}
+
+    row_count = facts.get("row_count_estimate")
+    rows_text = f"\n  rows: {row_count}" if isinstance(row_count, int) and row_count else ""
+
+    recommended_text = ", ".join(recommended) if recommended else "none"
+    clarification_text = "\n  needs_clarification: true" if needs_clarification else ""
+
+    block = (
+        header
+        + f"\n  inferred_content_type: {inferred}"
+        + f"\n  confidence: {confidence}"
+        + rows_text
+        + f"\n  recommended_mcp_intents: {recommended_text}"
+        + clarification_text
+    )
+
+    head_rows = preview.get("head_rows") or []
+    if head_rows and isinstance(head_rows, list):
+        rendered = [str(list(row)) for row in head_rows[:FILE_INTROSPECTION_INLINE_PREVIEW_ROWS]]
+        preview_text = " | ".join(rendered)
+        if len(preview_text) > FILE_INTROSPECTION_INLINE_MAX_CHARS:
+            preview_text = preview_text[: FILE_INTROSPECTION_INLINE_MAX_CHARS - 3] + "..."
+        else:
+            preview_text = preview_text or "(empty)"
+        block += f"\n  preview: {preview_text}"
+
+    warnings = summary.get("warnings") or []
+    if warnings:
+        joined = "; ".join(str(w) for w in warnings)[:FILE_INTROSPECTION_INLINE_MAX_CHARS]
+        block += f"\n  warnings: {joined}"
+
+    return block
 
 
 def _tool_result_to_content(result: Any) -> str:
@@ -465,13 +559,40 @@ class WorkflowOrchestrator:
                 }
             else:
                 content = _normalize_content(assistant_message.get("content"))
-                if ctx.structure_result or (ctx.retrieval_result or {}).get("items") or ctx.artifacts:
-                    content = _final_answer_from_context(ctx) or content
-                final_answer = content
+                # When the round produced an MCP visualization artifact, the
+                # artifact already speaks for itself — the LLM's round-1
+                # content (e.g. "好的, 这就画") is the natural final answer and
+                # a second LLM call to "compose" a summary would just add
+                # latency + token cost. Skip the composition step in that
+                # case. Structure / search results still need text
+                # composition because there is no visualization to lean on.
+                has_artifacts = bool(ctx.artifacts)
+                has_structure_or_search = bool(
+                    ctx.structure_result
+                    or (ctx.retrieval_result or {}).get("items")
+                )
+                if has_artifacts:
+                    composition_source = "artifact_self_describing"
+                    final_answer = content
+                elif has_structure_or_search:
+                    composed = _final_answer_from_context(ctx)
+                    if composed is not None:
+                        content = composed
+                        composition_source = "context_composition"
+                    else:
+                        composition_source = "llm_function_calling"
+                    final_answer = content
+                else:
+                    composition_source = "llm_function_calling"
+                    final_answer = content
                 result = _done(
                     "answer_composition",
                     llm_t0,
-                    {"round": round_idx, "answer_len": len(content), "source": "llm_function_calling"},
+                    {
+                        "round": round_idx,
+                        "answer_len": len(content),
+                        "source": composition_source,
+                    },
                 )
                 ctx.step_results.append(result)
                 yield {
@@ -481,19 +602,61 @@ class WorkflowOrchestrator:
                     "latency_ms": result.latency_ms,
                     "error": result.error_message,
                     "fallback_used": result.fallback_used,
+                    "data": result.data,
                 }
                 break
 
+            # Run the round's tool_calls in parallel — the LLM can return 2-3
+            # calls per round (e.g. ``get_mp_structure`` + ``render_with_mcp``)
+            # and serial execution doubles the wall-clock for nothing. We still
+            # collect results in original order so messages / step_results /
+            # step_end events keep a stable ordering, and we serialize
+            # context mutations through ``_ctx_lock`` so ``_update_context_from_tool``
+            # can safely write to ``ctx.artifacts`` / ``ctx.structure_result``.
+            _ctx_lock = threading.Lock()
+            tool_specs: list[dict[str, Any]] = []
             for tool_call in tool_calls:
-                tool_t0 = time.time()
                 fn = (tool_call.get("function") or {}).get("name", "")
                 args_text = (tool_call.get("function") or {}).get("arguments", "")
                 tool_call_id = tool_call.get("id")
                 yield {"type": "step_start", "step": fn}
+                tool_specs.append({
+                    "fn": fn,
+                    "args_text": args_text,
+                    "tool_call_id": tool_call_id,
+                    "arguments": _safe_json_load(args_text),
+                    "tool_t0": time.time(),
+                })
 
-                arguments = _safe_json_load(args_text)
-                result_payload = execute_openai_tool(fn, arguments)
-                _update_context_from_tool(ctx, fn, result_payload)
+            # Submit all tool executions concurrently. ``max_workers`` caps
+            # background fan-out so a pathological LLM response (e.g. 20
+            # tool_calls in one round) cannot spawn unbounded work.
+            max_workers = max(1, min(len(tool_specs), WORKFLOW_MAX_PARALLEL_TOOLS))
+            results_by_index: dict[int, Any] = {}
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="wf-tool") as pool:
+                future_to_index = {
+                    pool.submit(execute_openai_tool, spec["fn"], spec["arguments"]): idx
+                    for idx, spec in enumerate(tool_specs)
+                }
+                for future, idx in future_to_index.items():
+                    try:
+                        results_by_index[idx] = future.result()
+                    except Exception as exc:
+                        results_by_index[idx] = {"error": f"tool execution raised: {exc.__class__.__name__}: {exc}"}
+
+            # Process results in the original tool_call order so messages,
+            # step_results, and yielded events stay deterministic. Mutations
+            # to ``ctx`` are serialized via ``_ctx_lock`` because two parallel
+            # tools could otherwise race on ``ctx.artifacts.append`` etc.
+            for idx, spec in enumerate(tool_specs):
+                fn = spec["fn"]
+                arguments = spec["arguments"]
+                tool_call_id = spec["tool_call_id"]
+                tool_t0 = spec["tool_t0"]
+                result_payload = results_by_index[idx]
+
+                with _ctx_lock:
+                    _update_context_from_tool(ctx, fn, result_payload)
 
                 messages.append(
                     {
@@ -524,6 +687,8 @@ class WorkflowOrchestrator:
                         code = ErrorCode.CIF_PARSE_FAILED
                     elif fn == "search_materials_by_criteria":
                         code = ErrorCode.MP_API_EMPTY_RESULT
+                    elif fn == "render_with_mcp":
+                        code = ErrorCode.MCP_RENDER_FAILED
                     else:
                         code = ErrorCode.MP_API_EMPTY_RESULT
                     tool_result = _fail(fn, tool_t0, code, str(error_message), tool_data)
