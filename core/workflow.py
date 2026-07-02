@@ -5,6 +5,8 @@ import re
 import time
 import uuid
 from collections.abc import Generator
+from importlib import import_module
+from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
@@ -31,6 +33,23 @@ SYSTEM_PROMPT = dedent(
     - 最终回答必须是整理后的自然语言说明，而不是原始数据转储。
     """
 ).strip()
+
+SYSTEM_PROMPT = (
+    SYSTEM_PROMPT
+    + "\n\n"
+    + dedent(
+        """
+        MCP 可视化工具约束：
+        - 当用户要求可视化上传文件、绘制 DOS/XRD/相图/结构时，使用 `render_with_mcp`。
+        - 只能传入 `intent`、`input_type="file"` 和上下文中列出的 `file_id`。
+        - 不要编造或输出 MCP server 名称、远程 tool 名称、本地路径、base64 内容或 API key。
+        - 如果一个请求需要多个可视化结果，可以多次调用 `render_with_mcp`。
+        - 如果多个 `.txt`/`.dat` 文件用途不明确，先要求用户澄清 DOS 或 XRD。
+        - PDF/DOC/JPG/PNG 第一版不直接调用 MCP 可视化工具。
+        - `get_mp_structure` 返回 `generated_file_id` 时，可用它继续调用 `render_with_mcp` 做结构可视化。
+        """
+    ).strip()
+)
 
 
 FINAL_ANSWER_PROMPT = dedent(
@@ -107,6 +126,72 @@ def _safe_json_load(text: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _sanitize_file_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "file_id": metadata.get("file_id"),
+        "filename": metadata.get("filename") or metadata.get("original_filename"),
+        "extension": metadata.get("extension"),
+        "mime_type": metadata.get("mime_type"),
+        "size_bytes": metadata.get("size_bytes"),
+        "source": metadata.get("source"),
+    }
+
+
+def _sanitize_tool_result(result: dict[str, Any]) -> dict[str, Any]:
+    sanitized = dict(result)
+    sanitized.pop("cif", None)
+    cif_path = sanitized.pop("cif_path", None)
+    if cif_path and "cif_filename" not in sanitized:
+        sanitized["cif_filename"] = Path(str(cif_path)).name
+    return sanitized
+
+
+def _load_uploaded_files(file_ids: list[str]) -> list[dict[str, Any]]:
+    if not file_ids:
+        return []
+
+    try:
+        upload_store = import_module("core.upload_store")
+    except ImportError as exc:
+        return [{"file_id": file_id, "error": f"Upload store unavailable: {exc}"} for file_id in file_ids]
+
+    uploaded_files: list[dict[str, Any]] = []
+    for file_id in file_ids[:10]:
+        try:
+            metadata = upload_store.get_file_metadata(file_id)
+        except Exception as exc:
+            uploaded_files.append({"file_id": file_id, "error": str(exc)})
+            continue
+        if isinstance(metadata, dict):
+            uploaded_files.append(_sanitize_file_metadata(metadata))
+    return uploaded_files
+
+
+def _format_file_context(uploaded_files: list[dict[str, Any]]) -> str:
+    if not uploaded_files:
+        return ""
+
+    lines = ["用户当前可用文件："]
+    for item in uploaded_files:
+        if item.get("error"):
+            lines.append(f"- file_id: {item.get('file_id')} (metadata error: {item.get('error')})")
+            continue
+        lines.append(
+            "- file_id: {file_id}\n"
+            "  filename: {filename}\n"
+            "  extension: {extension}\n"
+            "  size_bytes: {size_bytes}\n"
+            "  source: {source}".format(
+                file_id=item.get("file_id"),
+                filename=item.get("filename"),
+                extension=item.get("extension"),
+                size_bytes=item.get("size_bytes"),
+                source=item.get("source"),
+            )
+        )
+    return "\n".join(lines)
+
+
 def _tool_result_to_content(result: Any) -> str:
     if isinstance(result, str):
         return result
@@ -117,8 +202,7 @@ def _tool_result_to_content(result: Any) -> str:
                 return json.dumps(result["data"], ensure_ascii=False)
             note = result.get("note") or result.get("error") or "无结果"
             return note
-        sanitized = dict(result)
-        sanitized.pop("cif", None)
+        sanitized = _sanitize_tool_result(result)
         return json.dumps(sanitized, ensure_ascii=False)
     return json.dumps(result, ensure_ascii=False)
 
@@ -130,13 +214,16 @@ def _tool_result_for_context(result: Any) -> Any:
             if result.get("ok") and result.get("data"):
                 return {"results": result["data"]}
             return {"note": result.get("note") or result.get("error") or "无结果"}
-        sanitized = dict(result)
-        sanitized.pop("cif", None)
-        return sanitized
+        return _sanitize_tool_result(result)
     return result
 
 
 def _update_context_from_tool(ctx: WorkflowContext, tool_name: str, result: Any) -> None:
+    if tool_name == "render_with_mcp":
+        if isinstance(result, dict) and result.get("kind") == "mcp_visualization":
+            ctx.artifacts.append(result)
+        return
+
     if tool_name == "search_materials_by_criteria":
         items: list[dict[str, Any]] = []
         if isinstance(result, dict):
@@ -161,6 +248,17 @@ def _update_context_from_tool(ctx: WorkflowContext, tool_name: str, result: Any)
     ctx.slots["mp_id"] = result.get("mp_id")
     ctx.slots["formula"] = result.get("formula")
 
+    generated_file = result.get("generated_file")
+    generated_file_id = result.get("generated_file_id")
+    if isinstance(generated_file_id, str) and generated_file_id and generated_file_id not in ctx.file_ids:
+        ctx.file_ids.append(generated_file_id)
+    if isinstance(generated_file, dict):
+        file_summary = _sanitize_file_metadata(generated_file)
+        if file_summary.get("file_id") and all(
+            item.get("file_id") != file_summary["file_id"] for item in ctx.uploaded_files
+        ):
+            ctx.uploaded_files.append(file_summary)
+
     cif_path = result.get("cif_path")
     if not cif_path:
         return
@@ -181,6 +279,10 @@ def _update_context_from_tool(ctx: WorkflowContext, tool_name: str, result: Any)
 def _fallback_answer(ctx: WorkflowContext) -> str:
     structure = ctx.structure_result or {}
     items = (ctx.retrieval_result or {}).get("items", [])
+
+    if ctx.artifacts and not structure and not items:
+        titles = "、".join(str(item.get("title") or item.get("intent") or "可视化结果") for item in ctx.artifacts)
+        return f"已生成可视化结果：{titles}。"
 
     if structure:
         formula = structure.get("formula", "N/A")
@@ -239,6 +341,8 @@ def _final_answer_from_context(ctx: WorkflowContext) -> str | None:
         "question": ctx.question,
         "structure": _tool_result_for_context(ctx.structure_result),
         "retrieval_items": (ctx.retrieval_result or {}).get("items", []),
+        "uploaded_files": ctx.uploaded_files,
+        "artifacts": ctx.artifacts,
     }
 
     viz = ctx.viz_result or {}
@@ -283,20 +387,28 @@ def _final_answer_from_context(ctx: WorkflowContext) -> str | None:
 
 
 class WorkflowOrchestrator:
-    def run(self, question: str) -> WorkflowContext:
-        stream = self.run_stream(question)
+    def run(self, question: str, file_ids: list[str] | None = None) -> WorkflowContext:
+        stream = self.run_stream(question, file_ids=file_ids)
         while True:
             try:
                 next(stream)
             except StopIteration as stop:
                 return stop.value
 
-    def run_stream(self, question: str) -> Generator[dict[str, Any], None, WorkflowContext]:
-        ctx = WorkflowContext(question=question, trace_id=str(uuid.uuid4()))
+    def run_stream(
+        self,
+        question: str,
+        file_ids: list[str] | None = None,
+    ) -> Generator[dict[str, Any], None, WorkflowContext]:
+        ctx = WorkflowContext(question=question, trace_id=str(uuid.uuid4()), file_ids=list(file_ids or [])[:10])
+        ctx.uploaded_files = _load_uploaded_files(ctx.file_ids)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": question},
         ]
+        file_context = _format_file_context(ctx.uploaded_files)
+        if file_context:
+            messages.append({"role": "system", "content": file_context})
+        messages.append({"role": "user", "content": question})
 
         round_idx = 0
         final_answer = ""
@@ -353,7 +465,7 @@ class WorkflowOrchestrator:
                 }
             else:
                 content = _normalize_content(assistant_message.get("content"))
-                if ctx.structure_result or (ctx.retrieval_result or {}).get("items"):
+                if ctx.structure_result or (ctx.retrieval_result or {}).get("items") or ctx.artifacts:
                     content = _final_answer_from_context(ctx) or content
                 final_answer = content
                 result = _done(
@@ -396,6 +508,17 @@ class WorkflowOrchestrator:
                 if isinstance(result_payload, dict):
                     error_message = result_payload.get("error")
 
+                tool_data = {"arguments": arguments}
+                if fn == "render_with_mcp" and isinstance(result_payload, dict):
+                    if result_payload.get("kind") == "mcp_visualization":
+                        tool_data.update(
+                            {
+                                "intent": result_payload.get("intent"),
+                                "file_id": result_payload.get("source_file_id"),
+                                "artifact_id": result_payload.get("id"),
+                            }
+                        )
+
                 if error_message:
                     if fn == "get_mp_structure":
                         code = ErrorCode.CIF_PARSE_FAILED
@@ -403,9 +526,9 @@ class WorkflowOrchestrator:
                         code = ErrorCode.MP_API_EMPTY_RESULT
                     else:
                         code = ErrorCode.MP_API_EMPTY_RESULT
-                    tool_result = _fail(fn, tool_t0, code, str(error_message), {"arguments": arguments})
+                    tool_result = _fail(fn, tool_t0, code, str(error_message), tool_data)
                 else:
-                    tool_result = _done(fn, tool_t0, {"arguments": arguments})
+                    tool_result = _done(fn, tool_t0, tool_data)
 
                 ctx.step_results.append(tool_result)
                 yield {
@@ -415,6 +538,7 @@ class WorkflowOrchestrator:
                     "latency_ms": tool_result.latency_ms,
                     "error": tool_result.error_message,
                     "fallback_used": tool_result.fallback_used,
+                    "data": tool_result.data,
                 }
 
                 if fn == "get_mp_structure" and ctx.viz_result.get("filename"):
@@ -451,6 +575,7 @@ class WorkflowOrchestrator:
             "trace_id": ctx.trace_id,
             "answer": ctx.final_answer,
             "viz": ctx.viz_result,
+            "artifacts": ctx.artifacts,
             "step_results": [
                 {
                     "step_name": s.step_name,

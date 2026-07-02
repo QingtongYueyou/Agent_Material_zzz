@@ -224,10 +224,96 @@
   padding: 0 18px 21px;
 }
 
+.attachment-region {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 9px;
+}
+
+.attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.attachment-chip {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 31px;
+  display: inline-grid;
+  grid-template-columns: 16px minmax(0, auto) auto 22px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 8px;
+  border: 1px solid rgba(196, 207, 255, 0.92);
+  border-radius: 8px;
+  color: #243361;
+  background: rgba(247, 250, 255, 0.96);
+  box-shadow: 0 6px 14px rgba(72, 86, 160, 0.08);
+}
+
+.attachment-name {
+  min-width: 0;
+  max-width: 136px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.attachment-chip small {
+  color: #61709d;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.attachment-chip button {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: #61709d;
+  background: transparent;
+  cursor: pointer;
+}
+
+.attachment-chip button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.attachment-note {
+  color: #61709d;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.attachment-error {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 7px 8px;
+  border: 1px solid rgba(226, 93, 112, 0.24);
+  border-radius: 8px;
+  color: #bc4358;
+  background: rgba(255, 241, 244, 0.94);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.attachment-error svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
 .input-shell {
   min-height: 67px;
   display: grid;
-  grid-template-columns: 37px minmax(0, 1fr) 38px;
+  grid-template-columns: 35px minmax(0, 1fr) 38px;
   align-items: center;
   gap: 8px;
   padding: 0 11px;
@@ -237,10 +323,26 @@
   box-shadow: 0 8px 24px rgba(72, 86, 160, 0.08);
 }
 
+.file-input {
+  display: none;
+}
+
+.input-shell .attach-button {
+  width: 35px;
+  height: 35px;
+  color: #2457ff;
+  background: #edf3ff;
+  box-shadow: none;
+}
+
+.input-shell .attach-button:disabled {
+  opacity: 0.52;
+}
+
 .input-spark {
+  display: none;
   width: 30px;
   height: 30px;
-  display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 8px;
@@ -279,5 +381,15 @@
 .input-shell button:disabled {
   cursor: default;
   opacity: 0.52;
+}
+
+.spin {
+  animation: spin 0.85s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 

@@ -1,13 +1,24 @@
-import { FormEvent, useState } from "react";
-import { MessageCircleMore, SendHorizontal, Sparkles } from "lucide-react";
+import { Dispatch, FormEvent, SetStateAction, useRef, useState } from "react";
+import {
+  AlertCircle,
+  FileText,
+  LoaderCircle,
+  MessageCircleMore,
+  Paperclip,
+  SendHorizontal,
+  X,
+} from "lucide-react";
 import Markdown from "react-markdown";
-import type { ChatMessage, VizData } from "../types";
+import { uploadFile } from "../api";
+import type { ChatMessage, UploadedFile, VizData } from "../types";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
   running: boolean;
   viz: VizData | null;
-  onSubmit: (query: string) => void;
+  attachments: UploadedFile[];
+  onAttachmentsChange: Dispatch<SetStateAction<UploadedFile[]>>;
+  onSubmit: (query: string, fileIds: string[]) => void;
 }
 
 interface ParsedAssistantContent {
@@ -15,8 +26,18 @@ interface ParsedAssistantContent {
   thoughts: string[];
 }
 
-export function ChatPanel({ messages, running, viz, onSubmit }: ChatPanelProps) {
+export function ChatPanel({
+  messages,
+  running,
+  viz,
+  attachments,
+  onAttachmentsChange,
+  onSubmit,
+}: ChatPanelProps) {
   const [draft, setDraft] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
   const lastAssistantMessage = [...messages].reverse().find((message) => message.role === "assistant");
   const hasResult = Boolean(lastAssistantMessage?.content.trim() || viz);
@@ -28,7 +49,44 @@ export function ChatPanel({ messages, running, viz, onSubmit }: ChatPanelProps) 
       return;
     }
     setDraft("");
-    onSubmit(value);
+    setUploadError("");
+    onSubmit(value, attachments.map((file) => file.file_id));
+  }
+
+  async function handleFilesSelected(files: FileList | null) {
+    if (!files?.length || running) {
+      return;
+    }
+
+    setUploading(true);
+    setUploadError("");
+    const uploaded: UploadedFile[] = [];
+    const failures: string[] = [];
+
+    for (const file of Array.from(files)) {
+      try {
+        uploaded.push(await uploadFile(file));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "上传失败";
+        failures.push(`${file.name}: ${message}`);
+      }
+    }
+
+    if (uploaded.length > 0) {
+      onAttachmentsChange((current) => [...current, ...uploaded]);
+    }
+    if (failures.length > 0) {
+      setUploadError(failures.join("；"));
+    }
+
+    setUploading(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
+
+  function removeAttachment(fileId: string) {
+    onAttachmentsChange((current) => current.filter((file) => file.file_id !== fileId));
   }
 
   return (
@@ -93,10 +151,57 @@ export function ChatPanel({ messages, running, viz, onSubmit }: ChatPanelProps) 
       </div>
 
       <form className="chat-form" onSubmit={handleSubmit}>
+        {attachments.length > 0 || uploadError ? (
+          <div className="attachment-region">
+            {attachments.length > 0 ? (
+              <div className="attachment-list" aria-label="已上传附件">
+                {attachments.map((file) => (
+                  <span className="attachment-chip" key={file.file_id} title={file.filename}>
+                    <FileText size={14} />
+                    <span className="attachment-name">{file.filename}</span>
+                    <small>{formatFileSize(file.size_bytes)}</small>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(file.file_id)}
+                      disabled={running}
+                      aria-label={`移除附件 ${file.filename}`}
+                    >
+                      <X size={13} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {attachments.length > 0 ? (
+              <p className="attachment-note">可视化时文件会发送到远程 MCP 服务进行渲染。</p>
+            ) : null}
+            {uploadError ? (
+              <div className="attachment-error" role="alert">
+                <AlertCircle size={14} />
+                <span>{uploadError}</span>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="input-shell">
-          <span className="input-spark" aria-hidden="true">
-            <Sparkles size={18} />
-          </span>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="file-input"
+            onChange={(event) => void handleFilesSelected(event.target.files)}
+            disabled={running || uploading}
+          />
+          <button
+            type="button"
+            className="attach-button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={running || uploading}
+            aria-label="上传附件"
+            title="上传附件"
+          >
+            {uploading ? <LoaderCircle size={18} className="spin" /> : <Paperclip size={18} />}
+          </button>
           <input
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -110,6 +215,20 @@ export function ChatPanel({ messages, running, viz, onSubmit }: ChatPanelProps) 
       </form>
     </section>
   );
+}
+
+function formatFileSize(sizeBytes: number): string {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let value = sizeBytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
 }
 
 function AssistantContent({ content }: { content: string }) {

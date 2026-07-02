@@ -4,6 +4,7 @@ import type {
   McpRenderResponse,
   SplatAsset,
   ThreeDgsRenderResponse,
+  UploadedFile,
   VizData,
   WorkflowEvent,
 } from "./types";
@@ -31,13 +32,14 @@ export async function getHealth(): Promise<HealthResponse> {
 
 export async function streamChat(
   query: string,
+  fileIds: string[],
   onEvent: (event: WorkflowEvent) => void,
   signal?: AbortSignal
 ): Promise<void> {
   const response = await fetch(apiUrl("/api/chat/stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, file_ids: fileIds }),
     signal,
   });
 
@@ -68,6 +70,29 @@ export async function streamChat(
   if (buffer.trim()) {
     parseSseBlock(buffer.trim(), onEvent);
   }
+}
+
+export async function uploadFile(file: File): Promise<UploadedFile> {
+  const body = new FormData();
+  body.append("file", file);
+
+  const response = await fetch(apiUrl("/api/files/upload"), {
+    method: "POST",
+    body,
+  });
+
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const payload = await response.json();
+      detail = String(payload.detail ?? "");
+    } catch {
+      detail = await response.text();
+    }
+    throw new Error(detail || `File upload failed: ${response.status}`);
+  }
+
+  return response.json();
 }
 
 function parseSseBlock(block: string, onEvent: (event: WorkflowEvent) => void): void {

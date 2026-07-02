@@ -96,7 +96,7 @@ h1 {
 
 .input-shell {
   min-height: 58px;
-  grid-template-columns: minmax(0, 1fr) 40px;
+  grid-template-columns: 38px minmax(0, 1fr) 40px;
   border-width: 1px;
   border-radius: 8px;
 }

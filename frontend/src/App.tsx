@@ -5,7 +5,7 @@ import { ChatPanel } from "./components/ChatPanel";
 import { DataSummaryPanel } from "./components/DataSummaryPanel";
 import { TracePanel } from "./components/TracePanel";
 import { VisualizationPanel } from "./components/VisualizationPanel";
-import type { ChatMessage, StepRow, VizData, WorkflowEvent } from "./types";
+import type { Artifact, ChatMessage, StepRow, UploadedFile, VizData, WorkflowEvent } from "./types";
 
 function makeId(prefix: string): string {
   if (crypto.randomUUID) {
@@ -18,6 +18,8 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [viz, setViz] = useState<VizData | null>(null);
+  const [attachments, setAttachments] = useState<UploadedFile[]>([]);
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [traceId, setTraceId] = useState("");
   const [running, setRunning] = useState(false);
   const [backendOk, setBackendOk] = useState(false);
@@ -25,6 +27,7 @@ export default function App() {
   const answerTimerRef = useRef<number | null>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
   const hasAnswer = messages.some((message) => message.role === "assistant" && message.content.trim().length > 0);
+  const hasResults = hasAnswer || Boolean(viz) || artifacts.length > 0;
 
   useEffect(() => {
     getHealth()
@@ -50,7 +53,7 @@ export default function App() {
     });
   }, []);
 
-  async function submitQuery(query: string) {
+  async function submitQuery(query: string, fileIds: string[] = []) {
     stopAnswerTextStream();
     chatAbortRef.current?.abort();
     const controller = new AbortController();
@@ -63,12 +66,13 @@ export default function App() {
     ]);
     setSteps([]);
     setViz(null);
+    setArtifacts([]);
     setTraceId("");
     setRunning(true);
     streamingIdRef.current = assistantId;
 
     try {
-      await streamChat(query, handleWorkflowEvent, controller.signal);
+      await streamChat(query, fileIds, handleWorkflowEvent, controller.signal);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         return;
@@ -181,6 +185,7 @@ export default function App() {
     if (event.type === "final") {
       setTraceId(event.trace_id ?? "");
       setViz(event.viz ?? null);
+      setArtifacts(event.artifacts ?? []);
       const finalAnswer = event.answer ?? "";
       streamAnswerText(finalAnswer);
       return;
@@ -192,7 +197,7 @@ export default function App() {
   }
 
   return (
-    <main className={hasAnswer || viz ? "app-shell state-result" : "app-shell state-empty"}>
+    <main className={hasResults ? "app-shell state-result" : "app-shell state-empty"}>
       <header className="top-bar">
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true">
@@ -212,8 +217,17 @@ export default function App() {
       </header>
 
       <div className="main-grid">
-        <ChatPanel messages={messages} running={running} viz={viz} onSubmit={submitQuery} />
-        <VisualizationPanel viz={viz} />
+        <ChatPanel
+          messages={messages}
+          running={running}
+          viz={viz}
+          attachments={attachments}
+          onAttachmentsChange={setAttachments}
+          onSubmit={submitQuery}
+        />
+        <div className="visual-stack">
+          <VisualizationPanel viz={viz} artifacts={artifacts} />
+        </div>
         <aside className="right-stack">
           <TracePanel steps={steps} traceId={traceId} />
           <DataSummaryPanel viz={viz} />

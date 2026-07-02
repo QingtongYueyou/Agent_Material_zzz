@@ -962,3 +962,12 @@
 .state-result .analysis-cards .finding-box {
   margin-top: auto;
 }
+
+.state-result .chat-panel {
+  grid-template-rows: 52px minmax(0, 1fr) auto;
+}
+
+.state-result .visual-workspace.active-artifact .viewer-frame {
+  flex: 1 1 auto;
+  min-height: 460px;
+}

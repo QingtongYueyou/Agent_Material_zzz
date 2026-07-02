@@ -19,7 +19,9 @@ class ErrorCode(str, Enum):
     MP_API_EMPTY_RESULT = "MP_API_EMPTY_RESULT"
     CIF_PARSE_FAILED = "CIF_PARSE_FAILED"
     VIZ_DATA_MISSING = "VIZ_DATA_MISSING"
+    MCP_RENDER_FAILED = "MCP_RENDER_FAILED"
     ANSWER_COMPOSE_FAILED = "ANSWER_COMPOSE_FAILED"
+    FILE_INTROSPECTION_FAILED = "FILE_INTROSPECTION_FAILED"
 
 
 @dataclass
@@ -37,6 +39,9 @@ class StepResult:
 class WorkflowContext:
     question: str
     trace_id: str
+    file_ids: list[str] = field(default_factory=list)
+    uploaded_files: list[dict[str, Any]] = field(default_factory=list)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
     intent: str | None = None
     slots: dict[str, Any] = field(default_factory=dict)
     retrieval_result: dict[str, Any] = field(default_factory=dict)

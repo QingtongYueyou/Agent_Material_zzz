@@ -44,6 +44,29 @@ export interface VizData {
   xrd: XrdRecord[];
 }
 
+export interface UploadedFile {
+  file_id: string;
+  filename: string;
+  extension: string;
+  mime_type?: string | null;
+  size_bytes: number;
+  sha256?: string;
+  created_at: number;
+}
+
+export interface Artifact {
+  id: string;
+  kind: "mcp_visualization";
+  title: string;
+  intent: string;
+  display: "iframe";
+  render_url: string;
+  created_at?: number;
+  expires_at?: number;
+  source_file_id?: string;
+  warnings?: string[];
+}
+
 export interface WorkflowEvent {
   type: "step_start" | "step_end" | "final" | "error";
   step?: string;
@@ -54,6 +77,7 @@ export interface WorkflowEvent {
   answer?: string;
   trace_id?: string;
   viz?: VizData | null;
+  artifacts?: Artifact[];
   detail?: string;
   error_type?: string;
 }

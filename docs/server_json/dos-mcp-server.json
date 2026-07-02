@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "dos-mcp-server": {
+      "url": "http://219.232.220.140/view_mcp/dos/mcp",
+      "headers": {
+        "visualization-api-key": "THIS_IS_TEST_KEY_12321"
+      }
+    }
+  }
+}

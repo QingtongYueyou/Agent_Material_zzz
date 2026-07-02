@@ -68,6 +68,37 @@ class ToolsTests(unittest.TestCase):
             {"error": "Unknown tool: missing_tool"},
         )
 
+    def test_render_with_mcp_respects_gateway_disabled_flag(self) -> None:
+        with patch.object(self.tools, "MCP_TOOL_GATEWAY_ENABLED", False):
+            self.assertEqual(
+                self.tools.execute_openai_tool(
+                    "render_with_mcp",
+                    {"intent": "dos", "input_type": "file", "file_id": "file_1"},
+                ),
+                {"error": "MCP tool gateway is disabled."},
+            )
+
+    def test_render_intents_follow_route_table(self) -> None:
+        self.assertEqual(set(self.tools.MCP_RENDER_INTENTS), set(self.tools.ROUTE_TABLE))
+
+    def test_mcp_artifact_metadata_reads_nested_rpc_payload(self) -> None:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "result": {
+                "structuredContent": {
+                    "render_url": "https://view.test/a",
+                    "expires_at": 123.0,
+                    "warnings": ["slow render"],
+                }
+            },
+        }
+
+        self.assertEqual(
+            self.tools._mcp_artifact_metadata(payload),
+            {"expires_at": 123.0, "warnings": ["slow render"]},
+        )
+
     def test_search_results_are_cached_by_query_parameters(self) -> None:
         class FakeSymmetry:
             symbol = "Fm-3m"

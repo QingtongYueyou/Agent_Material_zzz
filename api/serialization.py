@@ -70,4 +70,5 @@ def serialize_workflow_event(event: dict[str, Any]) -> dict[str, Any]:
     payload = dict(event)
     if payload.get("type") == "final":
         payload["viz"] = serialize_viz(payload.get("viz"))
+        payload["artifacts"] = _json_safe(payload.get("artifacts") or [])
     return _json_safe(payload)

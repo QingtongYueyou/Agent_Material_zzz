@@ -1,13 +1,117 @@
-# MCP 工具扩展两期开发方案
+# MCP 工具扩展实施计划
 
-> 适用版本: 2026-07  
-> 目标: 将远程 MCP 可视化服务接入为系统级工具扩展，使用户通过自然语言和上传文件触发 LLM 意图解析、后端受控路由、MCP 工具调用，并在前端同时展示多个可视化结果。
+> 修订日期: 2026-07-01
+> 当前目标: 基于现有 FastAPI + React 项目，把远程 MCP 可视化服务接入为受控、可扩展的系统工具；第一版先跑通“上传文件 -> LLM 意图识别 -> 后端白名单路由 -> MCP tools/call -> artifacts[] -> 前端 iframe 展示”的最小闭环。
 
 ---
 
-## 一、目标效果
+## 1. 当前项目现状
 
-用户不需要理解 MCP server、tool name 或文件类型规则。用户只需要上传文件并用自然语言描述目标:
+这份计划以当前仓库代码为准，而不是从零设计。
+
+### 1.1 后端现状
+
+- `api/schemas.py`
+  - `ChatRequest` 当前只有 `query`。
+  - `McpRenderRequest` 当前只有 `cif_path`。
+- `api/main.py`
+  - `/api/chat/stream` 只把 `request.query` 传给 `WorkflowOrchestrator.run_stream()`。
+  - `/api/mcp/render` 只支持 CIF 路径，并调用 `core.mcp_client.process_file()`。
+  - `/api/3dgs/render` 已有独立 3DGS MCP 专线。
+- `config/settings.py`
+  - 当前只有单个 `MCP_SERVER_URL` / `MCP_API_KEY`。
+  - 没有 `MCP_CONFIG_DIR`、`MCP_UPLOAD_DIR`、`MCP_TOOL_GATEWAY_ENABLED` 等通用网关配置。
+- `core/mcp_client.py`
+  - 当前是旧通用 MCP 客户端。
+  - 固定调用 `fz.process_file` / `fz.process_http`。
+  - 只面向单个 `MCP_SERVER_URL`。
+  - 已有可复用能力: plain JSON / SSE JSON 解析、`render_url` 提取、TTL freshness 判断。
+- `core/3dgs_mcp_client.py`
+  - 已支持 MCP initialize、`Mcp-Session-Id`、initialized notification、session 失效重试、`structuredContent` 提取。
+  - 新通用 gateway 应吸收这里的 sessionful MCP 处理经验，而不是只复制旧 `mcp_client.py`。
+- `core/tools.py`
+  - 当前 OpenAI tools 只有 `get_mp_structure` 和 `search_materials_by_criteria`。
+  - 没有 `render_with_mcp`。
+- `core/workflow.py`
+  - 当前 workflow 只围绕 Materials Project 查询、CIF 解析、单个 `viz_result`。
+  - `SYSTEM_PROMPT` 尚未约束 MCP 可视化工具调用。
+  - final SSE 事件只返回 `viz`，没有 `artifacts`。
+- `core/workflow_types.py`
+  - `WorkflowContext` 当前没有 `file_ids`、`uploaded_files`、`artifacts`。
+- `api/serialization.py`
+  - 当前只特殊序列化 `viz`，没有 artifact 序列化。
+
+### 1.2 前端现状
+
+- `frontend/src/api.ts`
+  - `streamChat(query)` 只发送 `{ query }`。
+  - 没有上传 API。
+- `frontend/src/types.ts`
+  - `WorkflowEvent` 没有 `artifacts`。
+  - 没有 `UploadedFile` / `Artifact` 类型。
+- `frontend/src/App.tsx`
+  - 只维护单个 `viz` 状态。
+  - final 事件只读取 `event.viz`。
+- `frontend/src/components/ChatPanel.tsx`
+  - 没有附件上传和附件 chip。
+- `frontend/src/components/VisualizationPanel.tsx`
+  - 主要围绕单个 `VizData` 和 3DGS viewer 展示。
+- `frontend/src/components/McpViewer.tsx`
+  - 已有 iframe、缓存、过期刷新、健康检查、错误展示逻辑。
+  - 后续 `McpIframeArtifact` 应优先复用这些状态管理思路。
+
+### 1.3 MCP server 配置现状
+
+当前仓库已有:
+
+```text
+docs/server_json/
+  cz3-mcp-server.json
+  dos-mcp-server.json
+  dw3-mcp-server.json
+  fz-mcp-server.json
+  fzdl-mcp-server.json
+  hj-ol-mcp-server.json
+  hot2-mcp-server.json
+  hot3-mcp-server.json
+  nb-mcp-server.json
+  x-ray-mcp-server.json
+  xt-mcp-server.json
+  yxty3-mcp-server.json
+  yxy-mcp-server.json
+```
+
+因此计划不再假设唯一配置目录是:
+
+```text
+C:/Users/wyfz/OneDrive/Desktop/server_json/
+```
+
+新的约定:
+
+- 开发默认可用 `docs/server_json`。
+- 生产和个人环境用 `.env` 的 `MCP_CONFIG_DIR` 覆盖。
+- `docs/server_json` 只作为示例或开发配置，不应提交真实生产密钥。
+
+### 1.4 第一版不做的事
+
+第一版只追求最小闭环，不做以下能力:
+
+- PDF/DOC/JPG/PNG 内容理解。
+- 从论文图或截图反推曲线数据。
+- URL 输入和 SSRF 防护完整闭环。
+- 静态截图 `image_url`。
+- 对外 `/v1/render-jobs` 异步任务 API。
+- SDK。
+- 让 LLM 直接看到和选择全部 MCP server/tool。
+
+这些放到 Phase 2 或 Phase 3。
+
+---
+
+## 2. 总体目标
+
+用户只需要上传文件并用自然语言描述目标:
 
 ```text
 把这个 DOS 数据画出来。
@@ -16,320 +120,341 @@
 查一下 LiFePO4 的结构并可视化。
 ```
 
-系统完成以下流程:
+系统第一版目标链路:
 
 ```text
-1. 前端上传文件，后端保存并生成 file_id。
-2. 用户问题和 file_id 一起进入对话工作流。
-3. LLM 识别用户意图，例如 structure、dos、xrd、binary_phase。
-4. 后端根据 intent、文件后缀、MCP 白名单选择具体 server/tool。
-5. 后端调用对应 MCP tools/call。
-6. MCP 返回 render_url。
-7. 前端把每个 render_url 作为 iframe artifact 同时展示。
+1. 前端上传文件。
+2. 后端保存文件，生成 file_id 和 metadata。
+3. 前端发送聊天请求 { query, file_ids }。
+4. workflow 把用户问题和上传文件摘要交给 LLM。
+5. LLM 只调用统一工具 render_with_mcp，并只输出 intent/input_type/file_id。
+6. 后端 router 根据 intent + file metadata 选择白名单 server/tool。
+7. gateway 调用远程 MCP tools/call。
+8. MCP 返回 render_url。
+9. workflow 聚合 artifacts[]。
+10. SSE final 返回 answer + viz + artifacts。
+11. 前端展示现有 viz 面板，同时展示 artifact iframe 面板。
 ```
 
-最终前端展示应由单一 `viz` 升级为多个 `artifacts`:
+最终响应契约:
 
 ```json
 {
   "answer": "已生成 DOS 和 XRD 可视化结果。",
+  "viz": null,
   "artifacts": [
     {
       "id": "artifact_1",
       "kind": "mcp_visualization",
       "title": "DOS 可视化",
       "intent": "dos",
-      "server": "dos-mcp-server",
-      "tool": "dos.dos_file",
       "display": "iframe",
-      "render_url": "http://..."
-    },
-    {
-      "id": "artifact_2",
-      "kind": "mcp_visualization",
-      "title": "XRD 可视化",
-      "intent": "xrd",
-      "server": "x-ray-mcp-server",
-      "tool": "x_ray.xrd_file",
-      "display": "iframe",
-      "render_url": "http://..."
+      "render_url": "http://...",
+      "created_at": 1782892800,
+      "expires_at": 1782893400,
+      "source_file_id": "file_20260701_abcd1234"
     }
   ]
 }
 ```
 
+短期保留 `viz` 是为了兼容当前结构分析和 3DGS viewer；新 MCP 可视化结果走 `artifacts`。
+
 ---
 
-## 二、设计原则
+## 3. 设计原则
 
-### 2.1 LLM 只判断意图，不直接选择任意远程工具
+### 3.1 LLM 只判断 intent，不直接选择远程工具
 
-不建议把所有 MCP 工具裸露给 LLM，让 LLM 自己生成 `dos.dos_file`、`x_ray.xrd_file` 这类工具名。原因:
+不把远程 `dos.dos_file`、`x_ray.xrd_file`、`hot2.binary_xlsx_file` 等工具裸露给 LLM。
 
-- LLM 可能编造不存在的工具名。
-- LLM 不适合直接处理文件路径安全、MCP 鉴权、工具白名单。
-- 后续增加 MCP server 时不希望改大量 prompt。
+原因:
 
-推荐只暴露一个统一后端工具:
+- LLM 可能编造不存在的 tool name。
+- LLM 不应处理本地路径、base64 文件内容、密钥、server 白名单。
+- 后续增加 server 不应大幅改 prompt。
+
+LLM 只看到统一工具:
 
 ```text
 render_with_mcp
 ```
 
-LLM 负责输出:
+LLM 输出:
 
 ```json
 {
   "intent": "dos",
   "input_type": "file",
-  "file_id": "file_abc"
+  "file_id": "file_20260701_abcd1234"
 }
 ```
 
-后端负责将其路由到:
+后端路由到:
 
 ```text
 dos-mcp-server / dos.dos_file
 ```
 
-### 2.2 后端是 MCP 网关和安全边界
+### 3.2 后端是安全边界
 
-后端必须控制:
+后端必须负责:
 
-- 文件是否来自已上传文件库。
-- 文件后缀是否匹配工具要求。
-- MCP server 是否在白名单内。
-- MCP tool 是否在白名单内。
-- 是否允许把文件内容 base64 上传到远程 MCP。
+- `file_id` 是否存在。
+- 文件是否位于上传目录或系统生成文件目录内。
+- 文件后缀是否匹配 route。
+- server/tool 是否在白名单内。
+- 是否允许把该文件 base64 发送到远程 MCP。
+- 远程调用审计日志。
 
-### 2.3 前端只关心 artifact，不关心 MCP 细节
+### 3.3 前端只渲染 artifact
 
-前端不应该知道 `dos.dos_file`、`hot2.binary_xlsx_file` 的业务细节。前端只根据 artifact 的 `display` 字段渲染:
+前端不应该理解 MCP route table。
+
+前端只根据 artifact 的 `display` 渲染:
 
 ```text
-display = iframe -> iframe 展示 render_url
-display = image  -> img 展示 image_url
-display = data   -> 原生图表组件展示结构化数据
-display = file   -> 文件预览/下载
+display = iframe -> iframe + 打开新窗口 + 复制链接 + 刷新
+display = image  -> img, Phase 3
+display = data   -> 原生图表, Phase 3
+display = file   -> 文件预览/下载, Phase 3
 ```
 
-第一期只实现:
+第一版只实现:
 
 ```text
 display = iframe
 ```
 
----
+### 3.4 渐进迁移，不替换现有 3DGS
 
-## 三、总体架构
+当前 `viz` 和 3DGS MCP viewer 是已有主能力，不应被第一版通用 MCP 改造破坏。
 
-### 3.1 当前架构限制
-
-现有通用 MCP 链路接近如下:
+第一版 UI 策略:
 
 ```text
-POST /api/mcp/render
-  -> api.main.mcp_render()
-  -> core.mcp_client.process_file()
-  -> MCP_SERVER_URL
-  -> tools/call: fz.process_file
-  -> render_url
+VisualizationPanel(viz) 保留
+ArtifactPanel(artifacts) 新增
 ```
 
-当前问题:
-
-- 只支持一个 `MCP_SERVER_URL`。
-- 工具名写死为旧的 `fz.process_file` / `fz.process_http`。
-- 请求模型只面向 CIF，不适合 DOS、XRD、相图、能带、VTP 等工具。
-- 最终结果只有单个 `viz`，不适合同时展示多个 MCP 输出。
-
-### 3.2 目标架构
-
-```text
-前端上传文件
-  -> POST /api/files/upload
-  -> 后端保存文件并返回 file_id
-
-用户自然语言提问
-  -> POST /api/chat/stream { query, file_ids }
-  -> WorkflowOrchestrator
-  -> LLM function calling: render_with_mcp
-  -> core.mcp_router.resolve_route()
-  -> core.mcp_gateway.call_tool()
-  -> 远程 MCP server
-  -> render_url
-  -> artifacts[]
-  -> 前端 iframe 面板同时展示
-```
-
-### 3.3 模块拆分
-
-建议新增或改造以下模块:
-
-```text
-core/mcp_registry.py      读取 server_json 和 MCP server 配置
-core/mcp_gateway.py       通用 JSON-RPC MCP client
-core/mcp_router.py        intent + 文件类型 -> server/tool 路由
-core/upload_store.py      上传文件元数据、路径解析和安全校验
-api/files.py              文件上传 API
-api/schemas.py            扩展 chat/mcp 请求模型
-core/tools.py             增加 render_with_mcp 工具
-core/workflow.py          支持 artifacts[] 聚合输出
-frontend                  上传控件 + artifact iframe 面板
-```
+后续再考虑把 3DGS MCP viewer 也包装成 artifact。
 
 ---
 
-## 四、MCP 配置与路由
+## 4. Phase 0: 数据契约和工程基础
 
-### 4.1 配置来源
+Phase 0 是第一版闭环前的必要准备。没有这一步，上传文件和 artifacts 无法贯穿前后端。
 
-远程 MCP 配置当前位于:
+### 4.1 后端 schema
 
-```text
-C:/Users/wyfz/OneDrive/Desktop/server_json/
+修改 `api/schemas.py`:
+
+```python
+class ChatRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=10000)
+    file_ids: list[str] = Field(default_factory=list, max_length=10)
+
+
+class UploadedFileResponse(BaseModel):
+    file_id: str
+    filename: str
+    extension: str
+    mime_type: str | None = None
+    size_bytes: int
+    sha256: str
+    created_at: float
+    source: str = "user_upload"
 ```
 
-建议不要在代码里硬编码这个路径，而是在 `.env` 中增加:
+`McpRenderRequest` 短期保留，用于兼容 `/api/mcp/render`。
 
-```env
-MCP_CONFIG_DIR=C:/Users/wyfz/OneDrive/Desktop/server_json
-MCP_TOOL_GATEWAY_ENABLED=true
-MCP_UPLOAD_DIR=static/uploads
-MCP_MAX_UPLOAD_MB=100
+### 4.2 WorkflowContext
+
+修改 `core/workflow_types.py`:
+
+```python
+@dataclass
+class WorkflowContext:
+    question: str
+    trace_id: str
+    file_ids: list[str] = field(default_factory=list)
+    uploaded_files: list[dict[str, Any]] = field(default_factory=list)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
+    ...
 ```
 
-`core/mcp_registry.py` 负责读取目录内的 JSON:
+保留:
+
+```python
+viz_result: dict[str, Any] = field(default_factory=dict)
+```
+
+### 4.3 SSE final 事件
+
+修改 `core/workflow.py` 和 `api/serialization.py`，final 事件统一包含:
 
 ```json
 {
-  "mcpServers": {
-    "dos-mcp-server": {
-      "url": "http://219.232.220.140/view_mcp/dos/mcp",
-      "headers": {
-        "visualization-api-key": "THIS_IS_TEST_KEY_12321"
-      }
-    }
-  }
+  "type": "final",
+  "trace_id": "...",
+  "answer": "...",
+  "viz": {},
+  "artifacts": [],
+  "step_results": []
 }
 ```
 
-内部统一成:
+序列化要求:
 
-```python
+- `viz` 继续走现有 `serialize_viz()`。
+- `artifacts` 走 `_json_safe()`。
+- artifact 中不要放本地真实路径。
+
+### 4.4 前端类型和请求
+
+修改 `frontend/src/types.ts`:
+
+```ts
+export interface UploadedFile {
+  file_id: string;
+  filename: string;
+  extension: string;
+  mime_type?: string | null;
+  size_bytes: number;
+  sha256?: string;
+  created_at: number;
+}
+
+export interface Artifact {
+  id: string;
+  kind: "mcp_visualization";
+  title: string;
+  intent: string;
+  display: "iframe";
+  render_url: string;
+  created_at?: number;
+  expires_at?: number;
+  source_file_id?: string;
+  warnings?: string[];
+}
+
+export interface WorkflowEvent {
+  ...
+  artifacts?: Artifact[];
+}
+```
+
+修改 `frontend/src/api.ts`:
+
+```ts
+streamChat(query: string, fileIds: string[], onEvent, signal)
+```
+
+发送:
+
+```json
 {
-    "dos-mcp-server": {
-        "url": "...",
-        "headers": {"visualization-api-key": "..."},
-    }
+  "query": "...",
+  "file_ids": ["file_..."]
 }
 ```
 
-### 4.2 第一版路由表
+### 4.5 依赖和忽略规则
 
-先采用显式白名单路由，不依赖远程 `tools/list` 动态决定用户可调用能力。
+修改 `requirements.txt`:
 
-```python
-MCP_ROUTE_TABLE = {
-    "structure": {
-        "title": "结构可视化",
-        "server": "fz-mcp-server",
-        "file_tool": "fz.mol_file",
-        "url_tool": "fz.mol_url",
-        "extensions": [".cif", ".xyz", ".poscar", ".cell", ".pdb"],
-    },
-    "dos": {
-        "title": "DOS 可视化",
-        "server": "dos-mcp-server",
-        "file_tool": "dos.dos_file",
-        "url_tool": "dos.dos_url",
-        "extensions": [".dat", ".txt"],
-    },
-    "xrd": {
-        "title": "XRD 可视化",
-        "server": "x-ray-mcp-server",
-        "file_tool": "x_ray.xrd_file",
-        "url_tool": "x_ray.xrd_url",
-        "extensions": [".dat", ".txt"],
-    },
-    "binary_phase": {
-        "title": "二元相图可视化",
-        "server": "hot2-mcp-server",
-        "file_tool": "hot2.binary_xlsx_file",
-        "url_tool": "hot2.binary_xlsx_url",
-        "extensions": [".xls", ".xlsx"],
-    },
-    "ternary_phase": {
-        "title": "三元相图可视化",
-        "server": "hot3-mcp-server",
-        "file_tool": "hot3.ternary_xlsx_file",
-        "url_tool": "hot3.ternary_xlsx_url",
-        "extensions": [".xls", ".xlsx"],
-    },
-}
+```text
+python-multipart
 ```
 
-### 4.3 第二期扩展路由
+修改 `.gitignore`:
 
-第二期加入更多工具:
-
-```python
-{
-    "band": "nb.band_zip_file / nb.band_zip_url",
-    "vtp": "yxy.vtp_file / yxy.vtp_url",
-    "model": "hj_ol.model_file / hj_ol.model_url",
-    "molecular_dynamics": "fzdl.model_file / fzdl.model_url",
-    "phase_curve": "xt.phase_curve_file / xt.phase_curve_url",
-    "liquidus": "yxty3.liquidus_xlsx_file / yxty3.liquidus_xlsx_url",
-    "isothermal": "dw3.isothermal_xlsx_file / dw3.isothermal_xlsx_url",
-    "vertical_section": "cz3.vertical_xlsx_file / cz3.vertical_xlsx_url",
-}
+```text
+static/uploads/
+static/artifacts/
 ```
-
-对于 `.txt`、`.dat`、`.xlsx` 这种多义后缀，必须依赖 intent。文件后缀只做校验，不做最终唯一判断。
 
 ---
 
-## 五、上传文件设计
+## 5. Phase 1: 第一版最小闭环
 
-### 5.1 支持文件类型
+### 5.1 配置
 
-用户要求支持:
+修改 `config/settings.py`:
 
-```text
-txt, doc, pdf, jpg 等文件
+```python
+MCP_TOOL_GATEWAY_ENABLED = ...
+MCP_CONFIG_DIR = Path(os.getenv("MCP_CONFIG_DIR", BASE_DIR / "docs" / "server_json"))
+MCP_UPLOAD_DIR = Path(os.getenv("MCP_UPLOAD_DIR", STATIC_DIR / "uploads"))
+MCP_MAX_UPLOAD_MB = int(os.getenv("MCP_MAX_UPLOAD_MB", "100"))
+MCP_MAX_FILES_PER_REQUEST = int(os.getenv("MCP_MAX_FILES_PER_REQUEST", "10"))
+MCP_ALLOWED_UPLOAD_EXTENSIONS = {...}
 ```
 
-第一期按用途分成两类:
+保留旧配置:
 
-#### 可直接进入 MCP 可视化的材料数据文件
-
-```text
-.cif, .xyz, .poscar, .cell, .pdb
-.dat, .txt
-.xls, .xlsx
-.zip
-.vtp
-.stl, .glb
+```python
+MCP_ENABLED
+MCP_SERVER_URL
+MCP_API_KEY
 ```
 
-#### 作为上下文解析的文档/图片文件
+用途:
+
+- `/api/mcp/render` 兼容旧路径。
+- 回滚时可继续使用旧单 server 路径。
+
+### 5.2 Upload store
+
+新增 `core/upload_store.py`。
+
+职责:
+
+- 生成不可预测 `file_id`。
+- 保存原始文件。
+- 保存 `metadata.json`。
+- 计算 `sha256`。
+- 校验大小、后缀、路径。
+- 根据 `file_id` 安全解析文件。
+- 支持用户上传文件和系统生成文件。
+
+建议目录:
 
 ```text
-.pdf, .doc, .docx, .jpg, .jpeg, .png
+static/uploads/
+  file_20260701_abcd1234/
+    original.txt
+    metadata.json
 ```
 
-文档/图片通常不能直接调用现有 MCP 可视化工具。它们第一版用途是:
+metadata:
 
-- 提取文本给 LLM 作为上下文。
-- 从文档中识别数据文件 URL。
-- 让 LLM 判断用户真正想处理哪个上传文件。
+```json
+{
+  "file_id": "file_20260701_abcd1234",
+  "source": "user_upload",
+  "original_filename": "dos.txt",
+  "stored_filename": "original.txt",
+  "extension": ".txt",
+  "mime_type": "text/plain",
+  "size_bytes": 12345,
+  "sha256": "...",
+  "created_at": 1782892800
+}
+```
 
-如果 PDF 或 DOC 内包含数据表，第二期再考虑表格抽取并转换为 MCP 可接受的数据文件。
+安全要求:
 
-### 5.2 上传 API
+- `file_id` 只允许匹配后端生成格式。
+- 不接受任意本地路径。
+- `resolve_file(file_id)` 后必须确认路径在 `MCP_UPLOAD_DIR` 内。
+- 后续如果支持登录，需要把 `owner_id` 加进 metadata。
 
-新增:
+### 5.3 文件上传 API
+
+可在 `api/main.py` 直接加，也可以新增 `api/files.py` 后 include router。
+
+第一版建议新增 `api/files.py`:
 
 ```text
 POST /api/files/upload
@@ -345,240 +470,117 @@ Content-Type: multipart/form-data
   "extension": ".txt",
   "mime_type": "text/plain",
   "size_bytes": 12345,
-  "created_at": 1782892800
-}
-```
-
-聊天接口扩展:
-
-```json
-{
-  "query": "把这个 DOS 数据画出来",
-  "file_ids": ["file_20260701_abcd1234"]
-}
-```
-
-### 5.3 文件存储
-
-建议目录:
-
-```text
-static/uploads/
-  file_20260701_abcd1234/
-    original.txt
-    metadata.json
-```
-
-`metadata.json` 示例:
-
-```json
-{
-  "file_id": "file_20260701_abcd1234",
-  "original_filename": "dos.txt",
-  "stored_filename": "original.txt",
-  "extension": ".txt",
-  "mime_type": "text/plain",
-  "size_bytes": 12345,
   "sha256": "...",
   "created_at": 1782892800
 }
 ```
 
-安全约束:
+第一版允许直接上传的可视化数据文件:
 
-- 所有 MCP 文件调用只能使用 `file_id`，不能让 LLM 传任意本地路径。
-- 后端解析 file_id 后必须确认路径位于 `static/uploads` 内。
-- 上传大小和后缀必须校验。
-- 临时文件和用户上传文件默认不提交 git。
+```text
+.cif, .xyz, .poscar, .cell, .pdb
+.dat, .txt
+.xls, .xlsx
+```
 
----
+第二期再打开:
 
-## 六、LLM 工具设计
+```text
+.zip, .vtp, .stl, .glb, .dump, .cfg, .data, .lmp
+.pdf, .doc, .docx, .jpg, .jpeg, .png
+```
 
-### 6.1 新增统一工具 render_with_mcp
+### 5.4 MCP registry
 
-在 `core/tools.py` 中新增 OpenAI function spec:
+新增 `core/mcp_registry.py`。
+
+职责:
+
+- 读取 `MCP_CONFIG_DIR` 下所有 `.json`。
+- 支持当前格式:
 
 ```json
 {
-  "name": "render_with_mcp",
-  "description": "Render an uploaded material/scientific file or URL with a whitelisted MCP visualization tool.",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "intent": {
-        "type": "string",
-        "enum": [
-          "structure",
-          "dos",
-          "xrd",
-          "binary_phase",
-          "ternary_phase",
-          "band",
-          "vtp",
-          "model",
-          "liquidus",
-          "isothermal",
-          "vertical_section"
-        ]
-      },
-      "input_type": {
-        "type": "string",
-        "enum": ["file", "url"]
-      },
-      "file_id": {
-        "type": ["string", "null"]
-      },
-      "http_url": {
-        "type": ["string", "null"]
+  "mcpServers": {
+    "dos-mcp-server": {
+      "url": "http://219.232.220.140/view_mcp/dos/mcp",
+      "headers": {
+        "visualization-api-key": "..."
       }
-    },
-    "required": ["intent", "input_type"],
-    "additionalProperties": false
+    }
   }
 }
 ```
 
-### 6.2 Prompt 约束
-
-系统 prompt 需要增加:
-
-```text
-当用户要求可视化上传文件、绘制 DOS/XRD/相图/能带/结构/模型时，调用 render_with_mcp。
-不要自己编造 MCP server 名称或工具名称。
-如果一个请求需要多个可视化结果，可以多次调用 render_with_mcp。
-如果文件类型和意图不匹配，先说明无法确定，不要强行调用。
-PDF/DOC/JPG 默认作为上下文文件，除非明确提取到可用数据或 URL，否则不要直接调用 MCP 可视化工具。
-```
-
-### 6.3 多工具结果聚合
-
-`WorkflowContext` 建议新增:
-
-```python
-artifacts: list[dict[str, Any]]
-```
-
-`render_with_mcp` 每成功一次，追加一个 artifact:
+- 合并成内部 registry:
 
 ```python
 {
-    "id": "...",
-    "kind": "mcp_visualization",
-    "title": route.title,
-    "intent": intent,
-    "server": route.server,
-    "tool": selected_tool,
-    "display": "iframe",
-    "render_url": render_url,
-    "source": f"mcp:{intent}",
-    "created_at": now,
-    "expires_at": now + ttl_sec,
+    "dos-mcp-server": {
+        "url": "...",
+        "headers": {"visualization-api-key": "..."},
+    }
 }
 ```
 
-最终 SSE `final` 事件同时返回:
+- 校验:
+  - server name 非空。
+  - url 是绝对 http/https。
+  - headers 是 dict[str, str]。
+  - 重复 server name 报错。
+
+注意:
+
+- registry 只提供配置，不代表用户可任意调用。
+- 用户可调用能力由 `core/mcp_router.py` 的白名单 route table 决定。
+
+### 5.5 MCP gateway
+
+新增 `core/mcp_gateway.py`。
+
+职责:
+
+- `call_tool(server_name, tool_name, arguments) -> dict`
+- 从 registry 取 server url 和 headers。
+- 发送 JSON-RPC:
 
 ```json
 {
-  "answer": "...",
-  "viz": {},
-  "artifacts": []
+  "jsonrpc": "2.0",
+  "id": "...",
+  "method": "tools/call",
+  "params": {
+    "name": "dos.dos_file",
+    "arguments": {}
+  }
 }
 ```
 
-保留 `viz` 是为了兼容现有前端；新前端优先读取 `artifacts`。
+- 支持 plain JSON 和 SSE JSON 响应。
+- 支持 result 形态:
+  - `result.render_url`
+  - `result.structuredContent.render_url`
+  - `result.content[].text` 中的 JSON 字符串。
+- 支持 tool error:
+  - `result.isError == true`
+  - RPC `error`
+- 第一版可以先走 stateless JSON-RPC。
+- 后续兼容 sessionful MCP 时，复用 `core/3dgs_mcp_client.py` 的 initialize/session 逻辑。
 
----
+建议错误类型:
 
-## 七、前端展示设计
-
-### 7.1 上传交互
-
-前端输入区增加附件上传:
-
-```text
-[上传文件]  用户问题输入框  [发送]
+```python
+class MCPGatewayError(RuntimeError): ...
+class MCPRegistryError(MCPGatewayError): ...
+class MCPToolError(MCPGatewayError): ...
+class MCPRenderUrlMissingError(MCPGatewayError): ...
 ```
 
-上传成功后在输入框上方或下方显示附件 chip:
+### 5.6 MCP router
 
-```text
-dos.txt        12 KB    x
-xrd.txt        18 KB    x
-report.pdf    230 KB    x
-```
+新增 `core/mcp_router.py`。
 
-发送聊天时带上 `file_ids`。
-
-### 7.2 多 artifact 展示
-
-新增组件:
-
-```text
-ArtifactPanel
-ArtifactGrid
-McpIframeArtifact
-```
-
-展示样式:
-
-```text
-助手回答
-
-可视化结果
-------------------------------------------------
-| DOS 可视化                                   |
-| 来源: dos-mcp-server / dos.dos_file          |
-| [打开新窗口] [复制链接] [刷新]               |
-| iframe(render_url)                           |
-------------------------------------------------
-
-------------------------------------------------
-| XRD 可视化                                   |
-| 来源: x-ray-mcp-server / x_ray.xrd_file      |
-| [打开新窗口] [复制链接] [刷新]               |
-| iframe(render_url)                           |
-------------------------------------------------
-```
-
-### 7.3 iframe 兼容策略
-
-第一版默认 iframe。由于用户还不确定远程 `render_url` 是否允许 iframe 嵌入，前端要做降级:
-
-```text
-1. 默认加载 iframe。
-2. iframe 超时或空白时，显示“可能禁止嵌入，请在新窗口打开”。
-3. 始终提供“打开新窗口”按钮。
-```
-
-需要后端或前端验证:
-
-- `render_url` 是否可由浏览器直接访问。
-- 是否存在 `X-Frame-Options: DENY/SAMEORIGIN`。
-- 是否存在 CSP `frame-ancestors` 限制。
-
-如果远程页面禁止 iframe，第二期考虑:
-
-- 只提供新窗口打开。
-- 或联系 MCP 服务端放开 frame-ancestors。
-- 或由本系统提供代理页面，但代理不能保证绕过所有前端资源/CSP 限制。
-
----
-
-## 八、第一期开发范围
-
-### 8.1 目标
-
-建立最小可用闭环:
-
-```text
-上传文件 -> 自然语言 -> LLM intent -> MCP 路由 -> 远程 tools/call -> artifacts[] -> 前端 iframe 同时展示
-```
-
-### 8.2 支持工具
-
-第一期只支持 5 类高价值工具:
+第一版 route table:
 
 | intent | server | file tool | url tool | 文件类型 |
 | --- | --- | --- | --- | --- |
@@ -588,102 +590,330 @@ McpIframeArtifact
 | `binary_phase` | `hot2-mcp-server` | `hot2.binary_xlsx_file` | `hot2.binary_xlsx_url` | `.xls`, `.xlsx` |
 | `ternary_phase` | `hot3-mcp-server` | `hot3.ternary_xlsx_file` | `hot3.ternary_xlsx_url` | `.xls`, `.xlsx` |
 
-### 8.3 后端任务
+第一版只启用 `input_type=file`。
 
-1. 配置:
-   - 增加 `MCP_CONFIG_DIR`、`MCP_TOOL_GATEWAY_ENABLED`、`MCP_UPLOAD_DIR`、`MCP_MAX_UPLOAD_MB`。
+`url_tool` 保留在 route table 中，但 URL 调用放到 Phase 2。
 
-2. MCP registry:
-   - 读取 `server_json` 目录。
-   - 校验每个 server 的 `url` 和 `headers`。
-   - 对外提供 `get_server(server_name)`。
+解析规则:
 
-3. MCP gateway:
-   - 支持 `call_tool(server_name, tool_name, arguments)`。
-   - 支持 plain JSON 和 SSE JSON 响应解析。
-   - 复用现有 `_extract_render_url` 能力。
+- intent 必须在 route table。
+- `input_type=file` 时必须有 `file_id`。
+- 文件后缀必须在 route.extensions。
+- `.txt` / `.dat` / `.xlsx` 只做后缀校验，不做唯一 intent 判断。
+- intent 不明确时 workflow 应要求用户澄清，不应让 router 猜。
 
-4. Upload store:
-   - 新增上传目录。
-   - 保存文件和 metadata。
-   - 根据 file_id 安全解析路径。
+### 5.7 render_with_mcp 工具
 
-5. Router:
-   - 根据 intent 和 input_type 选择 route。
-   - 对文件后缀做校验。
-   - 对 URL 工具做白名单校验。
+修改 `core/tools.py`，新增 OpenAI tool spec:
 
-6. LLM tool:
-   - 新增 `render_with_mcp`。
-   - 支持同一用户请求多次调用。
-
-7. Workflow:
-   - `WorkflowContext` 增加 `artifacts`。
-   - SSE 中 `step_end` 标记 MCP 工具调用结果。
-   - final 事件返回 `artifacts`。
-
-8. API:
-   - 新增 `POST /api/files/upload`。
-   - 扩展 `ChatRequest` 支持 `file_ids`。
-   - 保留现有 `/api/mcp/render` 兼容路径，可内部改用新 gateway。
-
-### 8.4 前端任务
-
-1. 输入区增加上传控件。
-2. 上传后显示附件列表。
-3. 发送聊天时附带 `file_ids`。
-4. SSE final 事件解析 `artifacts`。
-5. 新增 artifact iframe 面板。
-6. 支持多个 artifact 同时展示。
-7. iframe 失败时提供打开新窗口降级。
-
-### 8.5 第一验收标准
-
-以下场景可正常工作:
-
-```text
-上传 CIF，输入“把这个结构可视化”
-  -> 生成 structure artifact，iframe 展示。
-
-上传 dos.txt，输入“画 DOS”
-  -> 生成 dos artifact，iframe 展示。
-
-上传 xrd.txt，输入“画 XRD”
-  -> 生成 xrd artifact，iframe 展示。
-
-上传两个文件，输入“分别画 DOS 和 XRD”
-  -> 同时生成两个 artifacts。
-
-上传 xlsx，输入“这是二元相图，帮我画出来”
-  -> 生成 binary_phase artifact。
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "render_with_mcp",
+    "description": "Render an uploaded or system-generated materials file with a whitelisted MCP visualization route.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "intent": {
+          "type": "string",
+          "enum": ["structure", "dos", "xrd", "binary_phase", "ternary_phase"]
+        },
+        "input_type": {
+          "type": "string",
+          "enum": ["file"]
+        },
+        "file_id": {
+          "type": "string",
+          "description": "The uploaded or system-generated file_id shown in the conversation context."
+        }
+      },
+      "required": ["intent", "input_type", "file_id"],
+      "additionalProperties": false
+    }
+  }
+}
 ```
 
-错误场景:
+`execute_openai_tool("render_with_mcp", args)` 流程:
 
 ```text
-上传 pdf，输入“直接画 DOS”
-  -> 不应强行调用 dos.dos_file，应提示 PDF 不是直接可视化数据文件。
-
-上传 txt，用户没有说明 DOS 还是 XRD
-  -> 应提示需要明确 intent，或让 LLM 根据文件名/上下文谨慎判断。
-
-MCP 返回无 render_url
-  -> 返回清晰错误，不应让前端空白。
+1. upload_store.resolve_file(file_id)
+2. mcp_router.resolve_route(intent, input_type, file metadata)
+3. 读取文件 bytes -> base64
+4. gateway.call_tool(server, file_tool, arguments)
+5. 提取 render_url
+6. 生成 artifact dict
+7. 返回 artifact
 ```
+
+MCP file tool arguments 第一版统一:
+
+```json
+{
+  "filename": "dos.txt",
+  "content_base64": "..."
+}
+```
+
+如果某个 server 实际参数不同，优先在 route table 加 `argument_style` 或 `argument_builder`，不要让 LLM 决定参数形态。
+
+### 5.8 Workflow 改造
+
+修改 `core/workflow.py`。
+
+入口:
+
+```python
+def run_stream(self, question: str, file_ids: list[str] | None = None)
+```
+
+`api/main.py`:
+
+```python
+orchestrator.run_stream(request.query, file_ids=request.file_ids)
+```
+
+workflow 初始化时:
+
+```text
+1. 根据 file_ids 加载 metadata。
+2. 写入 ctx.uploaded_files。
+3. 把文件摘要注入 user/system context。
+```
+
+文件摘要示例:
+
+```text
+用户已上传文件:
+- file_id: file_20260701_abcd1234
+  filename: dos.txt
+  extension: .txt
+  size_bytes: 12345
+- file_id: file_20260701_efgh5678
+  filename: xrd.txt
+  extension: .txt
+  size_bytes: 18000
+```
+
+新增 prompt 约束:
+
+```text
+当用户要求可视化上传文件、绘制 DOS/XRD/相图/结构时，调用 render_with_mcp。
+不要编造 MCP server 名称或工具名称。
+只能使用上下文中列出的 file_id。
+如果请求需要多个可视化结果，可以多次调用 render_with_mcp。
+如果多个 .txt/.dat 文件用途不明确，先要求用户澄清。
+PDF/DOC/JPG/PNG 第一版不直接调用 MCP 可视化工具。
+```
+
+工具调用结果处理:
+
+- `render_with_mcp` 成功时，把 artifact append 到 `ctx.artifacts`。
+- `step_end` 中记录 intent、file_id、artifact id。
+- final 返回 `ctx.artifacts`。
+
+### 5.9 系统生成 CIF 的处理
+
+当前 `get_mp_structure` 会生成 CIF，并形成 `viz_result`。
+
+为了支持:
+
+```text
+查一下 LiFePO4 的结构并可视化。
+```
+
+第一版有两种可选实现:
+
+#### 推荐实现
+
+`get_mp_structure_raw()` 生成 CIF 后，调用 upload store 注册系统文件:
+
+```json
+{
+  "file_id": "file_20260701_system_abcd1234",
+  "source": "system_generated",
+  "original_filename": "mp-1661648_LiFePO4.cif",
+  "extension": ".cif"
+}
+```
+
+工具结果返回 `generated_file_id`，下一轮 LLM 可调用:
+
+```json
+{
+  "intent": "structure",
+  "input_type": "file",
+  "file_id": "file_20260701_system_abcd1234"
+}
+```
+
+#### 简化实现
+
+如果短期不想改 `get_mp_structure_raw()`，workflow 在看到 `ctx.viz_result.cif_path` 后内部创建 system file_id，并把它加入 context。
+
+不要让 LLM 直接拿 `cif_path` 调 MCP。
+
+### 5.10 前端上传和 artifact 展示
+
+新增 API:
+
+```ts
+uploadFile(file: File): Promise<UploadedFile>
+```
+
+修改 `ChatPanel`:
+
+- 增加文件选择按钮。
+- 上传成功后展示附件 chip。
+- 支持移除附件。
+- 发送消息时把附件 file_ids 传给 `onSubmit(query, fileIds)`。
+
+修改 `App.tsx`:
+
+```ts
+const [attachments, setAttachments] = useState<UploadedFile[]>([]);
+const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+```
+
+final 事件:
+
+```ts
+setViz(event.viz ?? null);
+setArtifacts(event.artifacts ?? []);
+```
+
+新增组件:
+
+```text
+frontend/src/components/ArtifactPanel.tsx
+frontend/src/components/ArtifactGrid.tsx
+frontend/src/components/McpIframeArtifact.tsx
+```
+
+`McpIframeArtifact` 功能:
+
+- iframe 展示 `render_url`。
+- 打开新窗口。
+- 复制链接。
+- 刷新 iframe。
+- 加载超时提示“可能禁止嵌入，请在新窗口打开”。
+
+复用 `McpViewer` 的思路:
+
+- loading/error 状态。
+- TTL/过期提示。
+- iframe fallback。
+
+第一版不要求探测 `X-Frame-Options` 和 CSP，只做前端超时降级。
 
 ---
 
-## 九、第二期开发范围
+## 6. Phase 1.5: 兼容和整合
 
-### 9.1 目标
+Phase 1.5 在最小闭环跑通后做，避免第一版改动过大。
 
-在第一期稳定后，扩展为更完整的工具生态:
+### 6.1 兼容 `/api/mcp/render`
+
+当前旧接口:
 
 ```text
-更多 MCP 类型 + 文档/图片上下文理解 + URL 提取 + iframe 兼容性验证 + 工具发现辅助
+POST /api/mcp/render { cif_path }
 ```
 
-### 9.2 新增 MCP 工具
+短期保留。
+
+可选改造:
+
+- 内部注册 CIF 为 system file。
+- 走 `mcp_router` 的 `structure` route。
+- 返回旧 `McpRenderResponse` 形态，避免破坏 `McpViewer`。
+
+### 6.2 3DGS artifact 化
+
+当前 3DGS 仍走:
+
+```text
+POST /api/3dgs/render
+```
+
+第一版不改。
+
+后续可以把 3DGS MCP viewer 包装成 artifact:
+
+```json
+{
+  "id": "artifact_3dgs_...",
+  "kind": "mcp_visualization",
+  "source": "3dgs:mcp",
+  "display": "iframe",
+  "title": "3DGS 结构视图",
+  "render_url": "http://127.0.0.1:8090/viewer/sessions/..."
+}
+```
+
+### 6.3 管理/诊断接口
+
+可加:
+
+```text
+GET /api/mcp/servers
+GET /api/mcp/routes
+```
+
+用途:
+
+- 查看 registry 是否加载成功。
+- 查看白名单 route table。
+- 前端或调试页面展示 MCP gateway 状态。
+
+不建议第一版调用真实远程 `tools/list` 作为生产路由依据。
+
+---
+
+## 7. Phase 2: 扩展输入和更多工具
+
+Phase 2 在 Phase 1 稳定后做。
+
+### 7.1 URL 输入
+
+开启:
+
+```json
+{
+  "input_type": "url",
+  "http_url": "https://..."
+}
+```
+
+必须先实现 SSRF 防护:
+
+- 只允许 http/https。
+- 禁止 localhost。
+- 禁止 127.0.0.0/8。
+- 禁止 10.0.0.0/8、172.16.0.0/12、192.168.0.0/16。
+- 禁止 link-local、metadata IP。
+- 可选 DNS resolve 后再次校验。
+
+### 7.2 文档和图片上下文
+
+支持:
+
+```text
+.pdf, .doc, .docx, .jpg, .jpeg, .png
+```
+
+第一目标:
+
+- 提取文本。
+- 提取 URL。
+- 帮 LLM 判断用户想处理哪个文件。
+
+不做:
+
+- 从论文图片自动还原 DOS/XRD 原始曲线数据。
+
+### 7.3 第二批 MCP routes
 
 | intent | server | file tool | url tool | 文件类型 |
 | --- | --- | --- | --- | --- |
@@ -696,304 +926,312 @@ MCP 返回无 render_url
 | `isothermal` | `dw3-mcp-server` | `dw3.isothermal_xlsx_file` | `dw3.isothermal_xlsx_url` | `.xls`, `.xlsx` |
 | `vertical_section` | `cz3-mcp-server` | `cz3.vertical_xlsx_file` | `cz3.vertical_xlsx_url` | `.xls`, `.xlsx` |
 
-`dw3` 和 `yxty3` 还有 `_dual`、`_mass` 变体。第二期可以增加 intent 参数:
+`dw3` / `yxty3` 的 `_dual`、`_mass` 变体后续增加参数:
 
 ```text
 composition_basis = atom | mass
 mode = single | dual
 ```
 
-后端再选择:
+由后端 router 选择具体 tool。
 
-```text
-dw3.isothermal_xlsx_file
-dw3.isothermal_xlsx_file_dual
-dw3.isothermal_xlsx_file_mass
-```
+---
 
-### 9.3 文档和图片理解
+## 8. Phase 3: 产品化 API / SDK
 
-第二期处理 `.pdf`、`.doc`、`.docx`、`.jpg`、`.png`:
-
-#### PDF/DOC/DOCX
+Phase 3 与第一版内部 UI 闭环解耦，不阻塞 Phase 1。
 
 目标:
 
-- 提取文本。
-- 提取 URL。
-- 提取表格摘要。
-- 作为 LLM 上下文辅助判断用户意图。
-
-可行路径:
-
 ```text
-PDF -> 文本提取 -> 找出 http(s) 数据文件 URL -> 调用 MCP *_url 工具。
-DOC/DOCX -> 文本/表格提取 -> 找出材料数据说明或 URL。
+Visualization Agent API / SDK
 ```
 
-暂不建议第一时间做:
+建议异步任务 API:
 
-```text
-PDF 截图/论文图 -> 自动还原成 DOS/XRD 原始数据
+```http
+POST /v1/render-jobs
+GET /v1/render-jobs/{job_id}
+GET /v1/artifacts/{artifact_id}
+GET /v1/artifacts/{artifact_id}/view
+GET /v1/artifacts/{artifact_id}/preview.png
 ```
 
-这类任务精度风险高，应作为后续研究功能。
+能力:
 
-#### JPG/PNG
+- API key 鉴权。
+- 调用方隔离。
+- job ownership。
+- artifact ownership。
+- rate limit。
+- file count limit。
+- artifact TTL 清理。
+- 可选截图 `image_url`。
 
-目标:
-
-- OCR 或视觉模型理解图片内容。
-- 判断是否是 DOS/XRD/相图截图。
-- 给出解释或要求用户提供原始数据文件。
-
-第一版不建议从图片反推原始曲线数据并调用 MCP。
-
-### 9.4 URL 工具
-
-第二期加强 URL 输入:
+静态截图服务:
 
 ```text
-用户: 用这个链接里的 XRD 数据画图 http://...
+MCP render_url
+  -> Playwright/Chromium
+  -> 等待渲染稳定
+  -> 截图 PNG
+  -> static/artifacts
+  -> image_url
 ```
 
-流程:
+截图失败不应导致整个 job 失败。如果已有 `render_url`，返回 warning。
+
+---
+
+## 9. 实施顺序
+
+### 9.1 Phase 0
+
+1. 修改 `api/schemas.py`: `ChatRequest.file_ids`、上传响应 schema。
+2. 修改 `core/workflow_types.py`: `file_ids`、`uploaded_files`、`artifacts`。
+3. 修改 `api/serialization.py`: final 支持 `artifacts`。
+4. 修改 `frontend/src/types.ts`: `UploadedFile`、`Artifact`、`WorkflowEvent.artifacts`。
+5. 修改 `frontend/src/api.ts`: `streamChat(query, fileIds, ...)`。
+6. 修改 `requirements.txt`: 增加 `python-multipart`。
+7. 修改 `.gitignore`: 忽略 `static/uploads/`、`static/artifacts/`。
+
+### 9.2 Phase 1 后端
+
+1. 修改 `config/settings.py`: 新增 MCP gateway/upload 配置。
+2. 新增 `core/upload_store.py`。
+3. 新增 `api/files.py` 或在 `api/main.py` 增加 `/api/files/upload`。
+4. 新增 `core/mcp_registry.py`。
+5. 新增 `core/mcp_gateway.py`。
+6. 新增 `core/mcp_router.py`。
+7. 修改 `core/tools.py`: 增加 `render_with_mcp`。
+8. 修改 `core/workflow.py`: 注入文件上下文、处理 `render_with_mcp` artifact。
+9. 处理系统生成 CIF 注册为 system file。
+
+### 9.3 Phase 1 前端
+
+1. 修改 `ChatPanel`: 上传控件、附件 chip。
+2. 修改 `App`: 保存 attachments/artifacts，传递 file_ids。
+3. 新增 `ArtifactPanel` / `ArtifactGrid` / `McpIframeArtifact`。
+4. 在主布局中让 `VisualizationPanel(viz)` 和 `ArtifactPanel(artifacts)` 并存。
+5. 增加 iframe 加载失败降级。
+
+### 9.4 Phase 1 验收
+
+成功场景:
 
 ```text
-LLM -> render_with_mcp(input_type=url, intent=xrd, http_url=...)
-Router -> x_ray.xrd_url
-MCP -> render_url
-Artifact -> iframe
+上传 CIF，输入“把这个结构可视化”
+  -> 生成 structure artifact，iframe 展示。
+
+上传 dos.txt，输入“画 DOS”
+  -> 生成 dos artifact，iframe 展示。
+
+上传 xrd.txt，输入“画 XRD”
+  -> 生成 xrd artifact，iframe 展示。
+
+上传两个 txt，输入“第一个画 DOS，第二个画 XRD”
+  -> 同时生成两个 artifacts。
+
+上传 xlsx，输入“这是二元相图，帮我画出来”
+  -> 生成 binary_phase artifact。
+
+输入“查一下 LiFePO4 的结构并可视化”
+  -> get_mp_structure 生成 CIF
+  -> 系统注册 generated_file_id
+  -> 生成 structure artifact 或保留 viz + 生成 artifact。
 ```
 
-后端校验:
-
-- URL 必须是 http/https。
-- 可选: 禁止 localhost、内网 IP，避免 SSRF。
-- URL 后缀与 intent 尽量匹配。
-
-### 9.5 工具发现辅助
-
-第二期可以增加后台管理接口:
+错误场景:
 
 ```text
-GET /api/mcp/servers
-GET /api/mcp/servers/{server}/tools
-```
+上传 pdf，输入“直接画 DOS”
+  -> 不调用 dos.dos_file，提示 PDF 第一版不是直接可视化数据文件。
 
-用途:
+上传 txt，用户没有说明 DOS 还是 XRD
+  -> 要求用户明确用途，或在文件名明确时谨慎判断。
 
-- 检查 `server_json` 是否加载成功。
-- 展示每个 server 的 tools/list。
-- 帮助维护路由表。
+MCP 返回无 render_url
+  -> step_end 标记失败，final answer 说明失败原因，前端不显示空白 artifact。
 
-注意: 这不等于让 LLM 动态调用任意工具。生产路径仍使用白名单路由。
-
-### 9.6 第二期验收标准
-
-```text
-上传 zip，输入“画能带”
-  -> 生成 band artifact。
-
-上传 vtp，输入“显示这个 VTP 模型”
-  -> 生成 vtp artifact。
-
-上传 PDF，输入“找出里面的数据链接并画 XRD”
-  -> 系统能提取 URL 并调用 x_ray.xrd_url，或说明未找到可用 URL。
-
-输入远程 URL，要求生成 DOS/XRD/相图
-  -> 调用对应 *_url 工具。
-
-同一次对话生成 3 个以上 artifact
-  -> 前端稳定展示，不覆盖旧结果。
+file_id 不存在或路径逃逸
+  -> 后端 400/404，不调用 MCP。
 ```
 
 ---
 
-## 十、安全与风险
+## 10. 测试计划
 
-### 10.1 文件上传风险
+所有 Python 命令按项目约定使用 Conda 环境:
 
-必须限制:
+```powershell
+conda run -n agno-assist python ...
+conda run -n agno-assist pytest ...
+conda run -n agno-assist python -m pip ...
+```
 
-- 上传大小。
-- 后缀白名单。
-- 文件保存目录。
-- 文件名规范化。
-- 禁止通过 file_id 读取上传目录外文件。
+### 10.1 后端单元测试
 
-### 10.2 远程 MCP 数据外传风险
-
-调用 `*_file` 工具会把文件内容 base64 发送到远程 MCP server。系统需要:
-
-- 在 UI 或配置中明确这是远程可视化调用。
-- 只对用户上传文件或系统生成文件调用。
-- 不把任意本地路径交给 MCP。
-- 记录调用 server/tool/file_id，便于审计。
-
-### 10.3 iframe 风险
-
-风险:
-
-- 远程页面禁止 iframe。
-- 远程页面加载慢或失败。
-- 远程页面样式不适配容器。
-
-降级:
-
-- 打开新窗口。
-- 显示 render_url。
-- 后端记录 iframe 兼容性状态。
-
-### 10.4 LLM 误判风险
-
-例如 `.txt` 可能是 DOS，也可能是 XRD。应采用:
-
-- intent 明确时才调用。
-- 文件名和用户语言共同判断。
-- 不确定时让 LLM 追问。
-- 后端后缀校验阻止明显错误调用。
-
----
-
-## 十一、测试计划
-
-### 11.1 后端单元测试
-
-新增测试:
+新增:
 
 ```text
+tests/test_upload_store.py
 tests/test_mcp_registry.py
 tests/test_mcp_router.py
-tests/test_upload_store.py
 tests/test_mcp_gateway.py
 tests/test_workflow_mcp_artifacts.py
 ```
 
 覆盖:
 
-- 加载 server_json。
-- 缺失配置时报错。
-- intent 到 server/tool 的路由。
+- 上传文件 metadata 写入。
+- 超大文件拒绝。
+- 不允许后缀拒绝。
+- file_id 格式校验。
+- 路径逃逸防护。
+- `docs/server_json` 加载。
+- 重复 server name 报错。
+- intent -> server/tool 路由。
 - 后缀不匹配时报错。
-- file_id 路径逃逸防护。
-- plain JSON 和 SSE JSON 响应解析。
-- render_url 提取。
-- 多 artifact 聚合。
+- plain JSON / SSE JSON 解析。
+- `structuredContent.render_url` 提取。
+- `content[].text` render_url 提取。
+- tool error 变成清晰异常。
+- workflow 多 artifact 聚合。
 
-### 11.2 后端集成测试
+### 10.2 后端集成测试
 
-使用 mock MCP server，不在 CI 中访问真实远程服务:
-
-```text
-tools/list -> 返回工具列表
-tools/call -> 返回 {"render_url": "http://example.test/view"}
-```
+使用 mock MCP server，不访问真实远程服务。
 
 验证:
 
-- `/api/files/upload`
-- `/api/chat`
-- `/api/mcp/render`
+```text
+POST /api/files/upload
+POST /api/chat
+POST /api/chat/stream
+POST /api/mcp/render 兼容路径
+```
 
-### 11.3 前端测试
+### 10.3 前端验证
+
+至少运行:
+
+```powershell
+npm --prefix frontend run build
+```
+
+如涉及布局或 iframe:
+
+```powershell
+npm --prefix frontend run visual:smoke
+```
 
 覆盖:
 
-- 文件上传成功显示附件 chip。
-- 发送消息携带 file_ids。
-- 多 artifact 渲染。
-- iframe fallback 显示“打开新窗口”。
+- 上传成功展示附件 chip。
+- 删除附件。
+- 发送请求携带 file_ids。
+- final 事件渲染多个 artifacts。
+- iframe fallback 展示“打开新窗口”。
 - 移动端布局不重叠。
 
 ---
 
-## 十二、实施顺序
+## 11. 风险和决策点
 
-### 第一期建议顺序
+### 11.1 远程 MCP 参数是否统一
 
-1. 后端配置和 registry。
-2. 通用 MCP gateway。
-3. 上传文件 store 和 API。
-4. MCP router 和第一批 route。
-5. `render_with_mcp` LLM 工具。
-6. `WorkflowContext.artifacts` 和 SSE final 扩展。
-7. 前端上传控件。
-8. 前端 artifact iframe 面板。
-9. 后端测试和前端 smoke 测试。
-
-### 第二期建议顺序
-
-1. 扩展 route table。
-2. URL 工具调用。
-3. PDF/DOC 文本和 URL 提取。
-4. JPG/PNG OCR 或视觉理解。
-5. MCP 管理/诊断接口。
-6. iframe 兼容性探测和降级优化。
-7. 更多端到端场景测试。
-
----
-
-## 十三、兼容策略
-
-### 13.1 保留现有 3DGS MCP
-
-现有 `3DGS MCP` 不应被替换。它可以作为 artifacts 的一种来源:
+计划默认所有 file tool 接收:
 
 ```json
 {
-  "kind": "mcp_visualization",
-  "source": "3dgs:mcp",
-  "display": "iframe",
-  "render_url": "http://127.0.0.1:8090/viewer/sessions/..."
+  "filename": "...",
+  "content_base64": "..."
 }
 ```
 
-这样前端统一显示:
+需要用真实 MCP server 或 mock server 验证。
+
+如果存在差异，在 route table 中加入参数构造策略，不交给 LLM。
+
+### 11.2 iframe 是否允许嵌入
+
+真实 `render_url` 可能被:
+
+- `X-Frame-Options`
+- CSP `frame-ancestors`
+
+限制。
+
+第一版前端降级为“打开新窗口”。Phase 2 再做兼容性探测。
+
+### 11.3 上传文件外传提示
+
+`*_file` 调用会把用户上传内容 base64 发送到远程 MCP server。
+
+第一版建议 UI 增加明确提示:
 
 ```text
-3DGS artifact
-远程 DOS artifact
-远程 XRD artifact
-远程相图 artifact
+可视化时文件会发送到远程 MCP 服务进行渲染。
 ```
 
-### 13.2 保留旧字段 viz
+### 11.4 密钥管理
 
-短期保留:
+`docs/server_json` 当前含测试 key 形态字段。
 
-```json
-{
-  "viz": {...},
-  "artifacts": [...]
-}
-```
+后续要明确:
 
-前端逐步迁移为优先使用 `artifacts`。当所有可视化都走 artifact 后，再考虑弱化 `viz`。
+- 示例配置可提交。
+- 真实 key 只能在 `.env` 或本地未跟踪配置中。
+- 如需要覆盖 headers，可支持环境变量注入。
+
+### 11.5 用户隔离
+
+当前项目没有登录态。
+
+第一版 metadata 不绑定用户也可跑通本地 demo。
+
+若要部署给多用户，必须补:
+
+- owner/session 绑定。
+- 上传文件访问隔离。
+- artifact 访问隔离。
+- 清理任务。
 
 ---
 
-## 十四、开放问题
+## 12. 第一版最小闭环总结
 
-1. 真实远程 `render_url` 是否允许 iframe 嵌入，需要实际调用后验证。
-2. 远程 MCP 返回的 `render_url` 是否有过期时间，如果没有，需要本系统设置默认 TTL。
-3. PDF/DOC/JPG 是否只作为上下文，还是后续要支持自动抽取曲线数据。
-4. 上传文件是否需要用户级隔离和登录态绑定。
-5. 是否需要在 UI 中明确提示“该文件将发送到远程 MCP 服务进行渲染”。
-
----
-
-## 十五、第一版最小闭环总结
-
-第一版不要试图一次解决所有文件和所有 MCP 工具。最小闭环是:
+第一版只做这条链路:
 
 ```text
 上传文件
-LLM 识别 intent
-后端白名单路由
-调用 fz/dos/xrd/hot2/hot3
-返回 artifacts[]
-前端多个 iframe 同时展示
+-> file_id
+-> chat { query, file_ids }
+-> LLM render_with_mcp(intent, file_id)
+-> 后端白名单 route
+-> MCP gateway tools/call
+-> render_url
+-> artifacts[]
+-> 前端 iframe 展示
 ```
 
-这个闭环跑通后，新的 MCP server 就可以作为系统工具扩展持续添加，而不需要重写前端展示逻辑或让用户理解工具细节。
+保留现有能力:
+
+```text
+Materials Project 查询
+CIF 解析
+viz
+3DGS MCP viewer
+旧 /api/mcp/render
+```
+
+不在第一版混入:
+
+```text
+PDF/DOC/JPG 理解
+URL SSRF 完整链路
+截图 image_url
+第三方 API/SDK
+```
+
+这样改动边界清楚，失败时也容易定位是上传、路由、gateway、workflow 还是前端展示的问题。

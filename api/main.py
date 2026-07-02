@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from api.files import router as files_router
 from api.schemas import ChatRequest, McpRenderRequest, MetricRequest, ThreeDGSRenderRequest
 from api.serialization import serialize_workflow_event
 from config.settings import (
@@ -51,6 +52,7 @@ app.add_middleware(
 )
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(files_router)
 
 _SERVED_ASSET_SUFFIXES = {".ksplat", ".ply", ".rad", ".radc", ".splat", ".spz"}
 _ASSET_ROOTS = (STATIC_DIR.resolve(),)
@@ -96,10 +98,10 @@ def _sse_line(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _chat_event_stream(query: str) -> Generator[str, None, None]:
+def _chat_event_stream(query: str, file_ids: list[str] | None = None) -> Generator[str, None, None]:
     try:
         orchestrator = WorkflowOrchestrator()
-        for event in orchestrator.run_stream(query):
+        for event in orchestrator.run_stream(query, file_ids=file_ids):
             yield _sse_line(serialize_workflow_event(event))
     except Exception as exc:
         yield _sse_line(
@@ -114,7 +116,7 @@ def _chat_event_stream(query: str) -> Generator[str, None, None]:
 @app.post("/api/chat/stream")
 def chat_stream(request: ChatRequest) -> StreamingResponse:
     return StreamingResponse(
-        _chat_event_stream(request.query),
+        _chat_event_stream(request.query, request.file_ids),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -123,7 +125,7 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
 @app.post("/api/chat")
 def chat(request: ChatRequest) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
-    for raw_line in _chat_event_stream(request.query):
+    for raw_line in _chat_event_stream(request.query, request.file_ids):
         payload = raw_line.removeprefix("data: ").strip()
         if payload:
             events.append(json.loads(payload))

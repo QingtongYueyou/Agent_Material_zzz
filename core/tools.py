@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from copy import deepcopy
+from importlib import import_module
 from typing import Any
 
 from agno.tools import tool
 from mp_api.client import MPRester
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
-from config.settings import CIF_DIR, MP_API_KEY
+from config.settings import CIF_DIR, MCP_TOOL_GATEWAY_ENABLED, MP_API_KEY
+from core.mcp_router import ROUTE_TABLE
 
 
 MP_SEARCH_CACHE_TTL_SEC = 3600
@@ -21,6 +24,8 @@ MP_BLOCKED_ERROR = (
     "这通常是服务端临时封禁或限流导致的，本地代码无法绕过。"
     "请减少请求频率、优先使用本地 CIF 缓存，并按提示联系 support@materialsproject.org 处理解封。"
 )
+
+MCP_RENDER_INTENTS = tuple(ROUTE_TABLE)
 
 _MP_SEARCH_CACHE: dict[tuple[Any, ...], tuple[float, dict]] = {}
 _MP_LAST_REQUEST_AT = 0.0
@@ -374,6 +379,151 @@ def search_materials_by_criteria(
     )
 
 
+def _try_register_generated_file(result: dict[str, Any]) -> dict[str, Any]:
+    cif_path = result.get("cif_path")
+    if not cif_path or result.get("generated_file_id"):
+        return result
+
+    try:
+        upload_store = import_module("core.upload_store")
+        metadata = upload_store.register_existing_file(
+            cif_path,
+            original_filename=str(cif_path).split("\\")[-1].split("/")[-1],
+            source="system_generated",
+        )
+    except Exception:
+        return result
+
+    if isinstance(metadata, dict) and metadata.get("file_id"):
+        result = dict(result)
+        result["generated_file_id"] = metadata["file_id"]
+        result["generated_file"] = {
+            "file_id": metadata.get("file_id"),
+            "filename": metadata.get("filename") or metadata.get("original_filename"),
+            "extension": metadata.get("extension"),
+            "mime_type": metadata.get("mime_type"),
+            "size_bytes": metadata.get("size_bytes"),
+            "source": metadata.get("source") or "system_generated",
+        }
+    return result
+
+
+def _route_value(route: Any, *names: str) -> Any:
+    if isinstance(route, dict):
+        for name in names:
+            if name in route:
+                return route[name]
+        return None
+    for name in names:
+        if hasattr(route, name):
+            return getattr(route, name)
+    return None
+
+
+def _iter_mcp_payloads(payload: Any):
+    if not isinstance(payload, dict):
+        return
+
+    yield payload
+
+    result = payload.get("result")
+    if isinstance(result, dict):
+        yield from _iter_mcp_payloads(result)
+
+    structured = payload.get("structuredContent")
+    if isinstance(structured, dict):
+        yield from _iter_mcp_payloads(structured)
+
+    content = payload.get("content")
+    if isinstance(content, list):
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                yield from _iter_mcp_payloads(parsed)
+
+
+def _mcp_artifact_metadata(payload: Any) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for item in _iter_mcp_payloads(payload):
+        if "expires_at" in item and "expires_at" not in metadata:
+            metadata["expires_at"] = item["expires_at"]
+        if "warnings" in item and "warnings" not in metadata:
+            metadata["warnings"] = item["warnings"]
+    return metadata
+
+
+def _execute_render_with_mcp(arguments: dict[str, Any]) -> dict[str, Any]:
+    intent = str(arguments.get("intent") or "").strip()
+    input_type = str(arguments.get("input_type") or "").strip()
+    file_id = str(arguments.get("file_id") or "").strip()
+
+    if not MCP_TOOL_GATEWAY_ENABLED:
+        return {"error": "MCP tool gateway is disabled."}
+
+    if intent not in MCP_RENDER_INTENTS:
+        return {"error": f"Unsupported render intent: {intent}"}
+    if input_type != "file":
+        return {"error": "render_with_mcp only supports input_type=file"}
+    if not file_id:
+        return {"error": "file_id is required"}
+
+    try:
+        upload_store = import_module("core.upload_store")
+        mcp_router = import_module("core.mcp_router")
+        mcp_gateway = import_module("core.mcp_gateway")
+    except ImportError as exc:
+        return {"error": f"MCP tool dependencies unavailable: {exc}"}
+
+    try:
+        metadata = upload_store.get_file_metadata(file_id)
+        route = mcp_router.resolve_route(intent, input_type, metadata)
+        read_metadata, content_base64 = upload_store.read_file_base64(file_id)
+        if isinstance(read_metadata, dict):
+            metadata = read_metadata
+
+        server_name = _route_value(route, "server", "server_name")
+        tool_name = _route_value(route, "file_tool", "tool", "tool_name")
+        title = _route_value(route, "title") or f"{intent} visualization"
+        if not server_name or not tool_name:
+            return {"error": "Resolved MCP route is missing server or file tool."}
+
+        filename = (
+            metadata.get("filename")
+            or metadata.get("original_filename")
+            or metadata.get("stored_filename")
+            or file_id
+        )
+        result = mcp_gateway.call_tool(
+            str(server_name),
+            str(tool_name),
+            {"filename": str(filename), "content_base64": content_base64},
+        )
+        render_url = mcp_gateway.extract_render_url(result)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+    artifact: dict[str, Any] = {
+        "id": f"artifact_{uuid.uuid4().hex[:12]}",
+        "kind": "mcp_visualization",
+        "title": str(title),
+        "intent": intent,
+        "display": "iframe",
+        "render_url": str(render_url),
+        "created_at": time.time(),
+        "source_file_id": file_id,
+    }
+    artifact.update(_mcp_artifact_metadata(result))
+    return artifact
+
+
 OPENAI_TOOL_SPECS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -438,7 +588,79 @@ OPENAI_TOOL_SPECS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "render_with_mcp",
+            "description": (
+                "Render an uploaded or system-generated materials file with a whitelisted "
+                "MCP visualization route. Only pass intent, input_type=file, and a file_id "
+                "that appears in the conversation context."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "intent": {
+                        "type": "string",
+                        "enum": list(MCP_RENDER_INTENTS),
+                    },
+                    "input_type": {
+                        "type": "string",
+                        "enum": ["file"],
+                    },
+                    "file_id": {
+                        "type": "string",
+                        "description": "The uploaded or system-generated file_id shown in the conversation context.",
+                    },
+                },
+                "required": ["intent", "input_type", "file_id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "inspect_uploaded_file",
+            "description": (
+                "Inspect an uploaded or system-generated materials file and return a structured "
+                "content summary (inferred content type, confidence, recommended MCP intents, "
+                "facts and preview). detail_level='fuller' returns more rows and per-column "
+                "statistics. Returns a JSON summary, never raw file bytes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_id": {"type": "string"},
+                    "detail_level": {
+                        "type": "string",
+                        "enum": ["default", "fuller"],
+                        "default": "default",
+                    },
+                },
+                "required": ["file_id"],
+                "additionalProperties": False,
+            },
+        },
+    },
 ]
+
+
+def _execute_inspect_uploaded_file(arguments: dict[str, Any]) -> dict[str, Any]:
+    file_id = str(arguments.get("file_id") or "").strip()
+    detail_level = str(arguments.get("detail_level") or "default").strip().lower() or "default"
+
+    if not file_id:
+        return {"error": "file_id is required"}
+    if detail_level not in {"default", "fuller"}:
+        return {"error": "detail_level must be 'default' or 'fuller'"}
+
+    try:
+        from core import file_introspection
+    except ImportError as exc:
+        return {"error": f"File introspection unavailable: {exc}"}
+
+    return file_introspection.summarize_file(file_id, detail_level=detail_level)
 
 
 def execute_openai_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
@@ -446,7 +668,10 @@ def execute_openai_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
         identifier = str(arguments.get("identifier") or "").strip()
         if not identifier:
             return {"error": "identifier is required"}
-        return get_mp_structure_raw(identifier)
+        result = get_mp_structure_raw(identifier)
+        if isinstance(result, dict) and not result.get("error"):
+            return _try_register_generated_file(result)
+        return result
 
     if tool_name == "search_materials_by_criteria":
         return search_materials_by_criteria_raw(
@@ -457,5 +682,11 @@ def execute_openai_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
             crystal_system=arguments.get("crystal_system"),
             max_results=int(arguments.get("max_results") or 5),
         )
+
+    if tool_name == "render_with_mcp":
+        return _execute_render_with_mcp(arguments)
+
+    if tool_name == "inspect_uploaded_file":
+        return _execute_inspect_uploaded_file(arguments)
 
     return {"error": f"Unknown tool: {tool_name}"}

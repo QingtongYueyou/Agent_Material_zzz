@@ -8,3 +8,4 @@ mp-api
 agno
 httpx
 pytest
+python-multipart

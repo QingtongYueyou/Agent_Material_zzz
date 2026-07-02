@@ -49,3 +49,7 @@ services/three_dgs_mcp/viewer/dist/
 
 # Large binaries
 cloudflared.exe
+
+# MCP generated files
+static/uploads/
+static/artifacts/

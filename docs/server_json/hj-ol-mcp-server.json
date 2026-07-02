@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "hj-ol-mcp-server": {
+      "url": "http://219.232.220.140/view_mcp/hj-ol/mcp",
+      "headers": {
+        "visualization-api-key": "THIS_IS_TEST_KEY_12321"
+      }
+    }
+  }
+}
