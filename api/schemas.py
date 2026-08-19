@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -29,6 +29,15 @@ class ThreeDGSRenderRequest(BaseModel):
     filename: str = Field(..., min_length=1)
     quality: str = "auto"
     render_profile: str = "performance"
+
+
+class VisualizationRenderRequest(BaseModel):
+    intent: str = Field(..., min_length=1)
+    input_type: Literal["file", "asset"] | None = None
+    file_id: str | None = None
+    filename: str | None = None
+    quality: Literal["auto", "preview", "balanced", "full", "source"] = "auto"
+    render_profile: Literal["performance", "quality"] = "performance"
 
 
 class MetricRequest(BaseModel):

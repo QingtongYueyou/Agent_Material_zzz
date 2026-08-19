@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="调用 Agent Material 统一可视化 API 的独立演示系统" />
+    <title>External Materials Console</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="ambient-grid" aria-hidden="true"></div>
+    <main class="page-shell">
+      <header class="masthead reveal reveal-1">
+        <div class="brand-block">
+          <span class="brand-index">EXT / 01</span>
+          <div>
+            <p class="eyebrow">Independent API Consumer</p>
+            <h1>材料可视化<br /><em>外部调用台</em></h1>
+          </div>
+        </div>
+        <div class="connection-card" id="connectionCard">
+          <span class="status-light" id="statusLight"></span>
+          <div>
+            <strong id="connectionLabel">正在连接上游服务</strong>
+            <code id="upstreamAddress">127.0.0.1:8080</code>
+          </div>
+        </div>
+      </header>
+
+      <section class="proof-strip reveal reveal-2" aria-label="系统边界说明">
+        <div>
+          <span>01</span>
+          <p>独立进程</p>
+        </div>
+        <i></i>
+        <div>
+          <span>02</span>
+          <p>仅通过 HTTP API</p>
+        </div>
+        <i></i>
+        <div>
+          <span id="capabilityCount">--</span>
+          <p>可视化能力</p>
+        </div>
+        <i></i>
+        <div>
+          <span>URL</span>
+          <p>iframe 交付</p>
+        </div>
+      </section>
+
+      <section class="workspace reveal reveal-3">
+        <aside class="control-deck">
+          <div class="section-heading">
+            <span class="section-number">A</span>
+            <div>
+              <p>Dispatch</p>
+              <h2>描述你的可视化任务</h2>
+            </div>
+          </div>
+
+          <label class="field-label" for="queryInput">自然语言指令</label>
+          <div class="prompt-wrap">
+            <textarea
+              id="queryInput"
+              rows="6"
+              placeholder="例如：查询 LiFePO4 的晶体结构，并使用 3DGS MCP 进行可视化"
+            ></textarea>
+            <span class="prompt-cursor" aria-hidden="true">AI</span>
+          </div>
+
+          <div class="prompt-examples" aria-label="示例指令">
+            <button data-example="查询 LiFePO4 的晶体结构，并使用 3DGS MCP 进行可视化">LiFePO₄ · 3DGS</button>
+            <button data-example="查询 LiFePO4 的晶体结构，并调用外部结构可视化 MCP 展示">LiFePO₄ · 外部结构 MCP</button>
+            <button data-example="分析我上传的文件，识别其材料数据类型并调用最合适的 MCP 工具进行可视化">自动识别上传文件</button>
+          </div>
+
+          <div class="input-group">
+            <label class="field-label" for="sourceFile">材料数据文件 <span class="optional">可选</span></label>
+            <label class="file-drop" for="sourceFile">
+              <input id="sourceFile" type="file" />
+              <span class="file-mark">＋</span>
+              <span>
+                <strong id="fileLabel">添加上下文文件</strong>
+                <small>不上传时，LLM 可按指令查询材料并生成文件</small>
+              </span>
+            </label>
+          </div>
+
+          <div class="agent-decision" id="agentDecision">
+            <span class="decision-label">Agent Decision</span>
+            <div>
+              <strong id="providerValue">等待 LLM 识别意图</strong>
+              <code id="toolValue">tool: --</code>
+            </div>
+          </div>
+
+          <button id="dispatchButton" class="dispatch-button">
+            <span>交给 LLM 自动执行</span>
+            <b>→</b>
+          </button>
+          <p class="privacy-note">LLM 只负责意图识别与工具选择；文件仅在选中外部 MCP 时发送给对应服务。</p>
+        </aside>
+
+        <section class="viewer-stage">
+          <div class="viewer-head">
+            <div class="section-heading compact">
+              <span class="section-number">B</span>
+              <div>
+                <p>Result</p>
+                <h2>远程可视化视图</h2>
+              </div>
+            </div>
+            <a id="openViewer" class="open-viewer disabled" target="_blank" rel="noreferrer">新窗口打开 ↗</a>
+          </div>
+          <div id="artifactTabs" class="artifact-tabs"></div>
+          <div class="viewer-frame" id="viewerFrame">
+            <div class="viewer-placeholder" id="viewerPlaceholder">
+              <div class="orbit-mark" aria-hidden="true"><span></span></div>
+              <p>等待 API 返回 <code>render_url</code></p>
+              <small>输入自然语言，Agent 将自动选择 MCP 工具</small>
+            </div>
+            <iframe id="resultViewer" title="材料可视化结果"></iframe>
+          </div>
+          <p id="assistantAnswer" class="assistant-answer"></p>
+        </section>
+      </section>
+
+      <section class="telemetry reveal reveal-4">
+        <div class="section-heading compact">
+          <span class="section-number">C</span>
+          <div>
+            <p>Evidence</p>
+              <h2>Agent 执行轨迹</h2>
+          </div>
+        </div>
+        <div class="telemetry-grid">
+          <ol id="timeline" class="timeline">
+            <li class="idle"><span></span><p>等待发起调用</p><time>--</time></li>
+          </ol>
+          <div class="payload-panel">
+            <div class="payload-tabs">
+              <button class="active" data-payload="request">Request</button>
+              <button data-payload="response">Response</button>
+            </div>
+            <pre id="payloadOutput">// API payload will appear here</pre>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status"></div>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

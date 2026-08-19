@@ -13,7 +13,13 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.files import router as files_router
-from api.schemas import ChatRequest, McpRenderRequest, MetricRequest, ThreeDGSRenderRequest
+from api.schemas import (
+    ChatRequest,
+    McpRenderRequest,
+    MetricRequest,
+    ThreeDGSRenderRequest,
+    VisualizationRenderRequest,
+)
 from api.serialization import serialize_workflow_event
 from config.settings import (
     BASE_DIR,
@@ -21,15 +27,18 @@ from config.settings import (
     CORS_ALLOWED_ORIGINS,
     MCP_ENABLED,
     MCP_REFRESH_SKEW_SEC,
+    MCP_TOOL_GATEWAY_ENABLED,
     STATIC_DIR,
     THREEDGS_MCP_ENABLED,
     THREEDGS_MCP_SERVER_URL,
     THREEDGS_RENDER_TTL_SEC,
 )
 from core.mcp_client import MCPClientError, process_file
+from core.mcp_router import ROUTE_TABLE
 from core.perf_metrics import append_interaction_metric, append_render_metric
 from core.spark_asset_ingest import ensure_auto_ingest_started, get_auto_ingest_status
 from core.splat_assets import resolve_splat_asset
+from core.tools import execute_openai_tool
 from core.workflow import WorkflowOrchestrator
 
 
@@ -259,6 +268,89 @@ def three_dgs_render(request: ThreeDGSRenderRequest) -> dict[str, Any]:
         )
     except ThreeDGSMCPClientError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/visualizations/capabilities")
+def visualization_capabilities() -> dict[str, Any]:
+    capabilities = [
+        {
+            "intent": "3dgs",
+            "title": "3D Gaussian Splatting",
+            "provider": "local-3dgs-mcp",
+            "tool": "3dgs.create_render",
+            "input_type": "asset",
+            "extensions": [".ksplat", ".ply", ".rad", ".splat", ".spz"],
+            "enabled": THREEDGS_MCP_ENABLED,
+        }
+    ]
+    capabilities.extend(
+        {
+            "intent": intent,
+            "title": str(route["title"]),
+            "provider": str(route["server_name"]),
+            "tool": str(route["file_tool"]),
+            "input_type": "file",
+            "extensions": sorted(str(extension) for extension in route["extensions"]),
+            "enabled": MCP_TOOL_GATEWAY_ENABLED,
+        }
+        for intent, route in ROUTE_TABLE.items()
+    )
+    return {"capabilities": capabilities}
+
+
+@app.post("/api/visualizations/render")
+def render_visualization(request: VisualizationRenderRequest) -> dict[str, Any]:
+    intent = request.intent.strip().lower()
+    if intent == "3dgs":
+        if request.input_type not in {None, "asset"}:
+            raise HTTPException(status_code=400, detail="3dgs visualization requires input_type='asset'.")
+        filename = (request.filename or "").strip()
+        if not filename:
+            raise HTTPException(status_code=400, detail="filename is required for 3dgs visualization.")
+        if not THREEDGS_MCP_ENABLED:
+            raise HTTPException(status_code=503, detail="3DGS MCP rendering is disabled.")
+        try:
+            result = create_3dgs_render(
+                filename,
+                quality=request.quality,
+                render_profile=request.render_profile,
+            )
+        except ThreeDGSMCPClientError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            **result,
+            "ok": True,
+            "intent": "3dgs",
+            "provider": "local-3dgs-mcp",
+            "tool": "3dgs.create_render",
+            "display": "iframe",
+        }
+
+    route = ROUTE_TABLE.get(intent)
+    if route is None:
+        allowed = ", ".join(["3dgs", *ROUTE_TABLE.keys()])
+        raise HTTPException(status_code=400, detail=f"Unsupported visualization intent. Allowed intents: {allowed}.")
+    if request.input_type not in {None, "file"}:
+        raise HTTPException(status_code=400, detail="External MCP visualization requires input_type='file'.")
+    file_id = (request.file_id or "").strip()
+    if not file_id:
+        raise HTTPException(status_code=400, detail="file_id is required for external MCP visualization.")
+    if not MCP_TOOL_GATEWAY_ENABLED:
+        raise HTTPException(status_code=503, detail="MCP tool gateway is disabled.")
+
+    result = execute_openai_tool(
+        "render_with_mcp",
+        {"intent": intent, "input_type": "file", "file_id": file_id},
+    )
+    if not isinstance(result, dict) or result.get("error"):
+        detail = result.get("error") if isinstance(result, dict) else "Invalid MCP render result."
+        raise HTTPException(status_code=502, detail=str(detail))
+    return {
+        **result,
+        "ok": True,
+        "provider": str(route["server_name"]),
+        "tool": str(route["file_tool"]),
+    }
 
 
 @app.post("/api/metrics/render")

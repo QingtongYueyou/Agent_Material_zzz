@@ -79,7 +79,45 @@ class ToolsTests(unittest.TestCase):
             )
 
     def test_render_intents_follow_route_table(self) -> None:
-        self.assertEqual(set(self.tools.MCP_RENDER_INTENTS), set(self.tools.ROUTE_TABLE))
+        self.assertEqual(set(self.tools.MCP_RENDER_INTENTS), {"3dgs", *self.tools.ROUTE_TABLE})
+
+    def test_render_with_mcp_routes_3dgs_from_file_metadata(self) -> None:
+        upload_store = types.SimpleNamespace(
+            get_file_metadata=lambda file_id: {
+                "file_id": file_id,
+                "filename": "mp-1661648_LiFePO4.cif",
+                "extension": ".cif",
+            }
+        )
+        three_dgs_client = types.SimpleNamespace(
+            create_render=lambda filename, **kwargs: {
+                "render_url": "http://viewer.test/3dgs?token=secret",
+                "created_at": 10.0,
+                "expires_at": 610.0,
+            }
+        )
+
+        def import_dependency(name: str):
+            if name == "core.upload_store":
+                return upload_store
+            if name == "core.3dgs_mcp_client":
+                return three_dgs_client
+            raise ImportError(name)
+
+        with (
+            patch.object(self.tools, "THREEDGS_MCP_ENABLED", True),
+            patch.object(self.tools, "import_module", side_effect=import_dependency),
+        ):
+            result = self.tools.execute_openai_tool(
+                "render_with_mcp",
+                {"intent": "3dgs", "input_type": "file", "file_id": "file-1"},
+            )
+
+        self.assertEqual(result["intent"], "3dgs")
+        self.assertEqual(result["provider"], "local-3dgs-mcp")
+        self.assertEqual(result["tool"], "3dgs.create_render")
+        self.assertEqual(result["render_url"], "http://viewer.test/3dgs?token=secret")
+        self.assertEqual(result["source_file_id"], "file-1")
 
     def test_mcp_artifact_metadata_reads_nested_rpc_payload(self) -> None:
         payload = {

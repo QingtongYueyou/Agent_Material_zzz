@@ -12,7 +12,9 @@ Agent Material 是一个面向材料科学工作流的前后端分离应用。�
 - 生成晶格参数、元素组成和模拟 XRD 数据
 - 加载本地 Spark/3DGS 资产
 - 通过 3DGS MCP 服务返回完整 `render_url` 并在 iframe 中展示独立 viewer
-- 可选调用 MCP 服务生成外部可视化 iframe
+- 接收自然语言与可选文件，由 LLM 自动识别意图并选择 3DGS 或外部材料 MCP
+- 通过统一 HTTP API 返回 MCP provider、tool 和可嵌入的 `render_url`
+- 支持结构、DOS、XRD、相图、能带、有限元、三维模型和分子动力学等可视化
 - 记录 3D 渲染和交互指标
 
 ## 目录
@@ -23,10 +25,12 @@ frontend/                React + TypeScript 前端
 core/                    材料分析业务核心
 config/                  路径常量和环境变量
 services/three_dgs_mcp/    3DGS MCP render_url 子服务与独立 viewer
+demo/external_consumer/   仅通过 HTTP API 调用本项目的独立演示系统
 cif_files/               CIF 缓存目录
 static/splat_files/      3DGS/Spark 源资产、派生资产和 manifest
 metrics/                 渲染/交互指标与分析脚本
 tools/                   Spark 资产构建工具
+tests/                   单元测试与 API/MCP 冒烟测试脚本
 docs/                    资产管线等补充文档
 ```
 
@@ -36,9 +40,18 @@ docs/                    资产管线等补充文档
 
 ```env
 MP_API_KEY=your-materials-project-key
-POE_API_KEY=your-llm-key
-POE_API_BASE_URL=https://api.poe.com/v1
-LLM_MODEL_ID=GPT-4o
+
+# 只需修改这一项即可切换 deepseek / minimax
+LLM_PROVIDER=deepseek
+
+DEEPSEEK_API_KEY=your-deepseek-key
+DEEPSEEK_API_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL_ID=deepseek-v4-flash
+
+MINIMAX_API_KEY=your-minimax-key
+MINIMAX_API_BASE_URL=https://api.minimaxi.com/v1
+MINIMAX_MODEL_ID=MiniMax-M3
+
 LLM_TIMEOUT_SEC=45
 
 MCP_ENABLED=true
@@ -58,11 +71,35 @@ SPARK_AUTO_VARIANT=balanced
 SPARK_ROOT=D:/tools/spark
 ```
 
-`MP_API_KEY` 也兼容旧变量名 `MAPI_KEY`。
+`MP_API_KEY` 也兼容旧变量名 `MAPI_KEY`。MiniMax 配置继续兼容旧的 `POE_API_KEY` 和 `POE_API_BASE_URL`。
+
+如需临时覆盖当前供应商的配置，可使用统一变量 `LLM_API_KEY`、`LLM_API_BASE_URL` 和 `LLM_MODEL_ID`。
 
 生产环境中 `THREEDGS_PUBLIC_BASE_URL` 必须配置成浏览器可访问的真实地址，不能使用 `127.0.0.1`、`localhost` 或 `0.0.0.0`。
 
 ## 启动
+
+### 一键启动开发服务
+
+在项目根目录执行：
+
+```powershell
+.\start-dev.ps1
+```
+
+该脚本会启动 3DGS MCP（默认 `8090`）、Agent Material API（默认 `8080`）和主前端（默认 `5173`）。
+
+如果 `8080` 已被其他程序或 WSL 端口转发占用，可以改用 `8081`：
+
+```powershell
+.\start-dev.ps1 -ApiPort 8081
+```
+
+也可以只启动 API：
+
+```powershell
+conda run -n agno-assist python -m uvicorn api.main:app --host 127.0.0.1 --port 8081
+```
 
 ### 3DGS MCP viewer
 
@@ -89,9 +126,8 @@ curl http://127.0.0.1:8090/health
 
 ### 主后端
 
-```bash
-conda activate agno-assist
-uvicorn api.main:app --host 127.0.0.1 --port 8080
+```powershell
+conda run -n agno-assist python -m uvicorn api.main:app --host 127.0.0.1 --port 8080
 ```
 
 健康检查：
@@ -126,17 +162,98 @@ set VITE_API_BASE_URL=http://127.0.0.1:8080
 set VITE_3DGS_RENDER_MODE=local
 ```
 
+### 独立外部调用 Demo
+
+`demo/external_consumer` 是一个独立进程，不导入本项目的 `api`、`core` 或 `services` 模块，只通过 HTTP 调用 Agent Material。用户只输入自然语言并可选上传文件，LLM 自动完成文件理解、意图识别和 MCP 工具选择。
+
+当 API 使用 `8081` 时，在项目根目录执行：
+
+```powershell
+.\demo\external_consumer\start.ps1 -UpstreamApi http://127.0.0.1:8081
+```
+
+浏览器访问 `http://127.0.0.1:3000`。
+
+无文件的 3DGS 示例指令：
+
+```text
+请查询 LiFePO4（Materials Project 编号 mp-1661648）的晶体结构，并用三维高斯泼溅方式生成可交互可视化。请实际调用工具完成，不要只描述操作步骤。
+```
+
+上传文件后自动选择外部 MCP 的示例指令：
+
+```text
+请分析我上传的材料文件，识别它的数据类型，并自动选择最合适的可视化能力生成可交互结果。不要让我选择工具，也不要只返回文字说明。
+```
+
 ## 后端接口
 
 - `GET /health`：后端和资产管线状态
 - `POST /api/chat/stream`：SSE 流式工作流事件
-- `POST /api/chat`：非流式调试接口
+- `POST /api/chat`：自然语言 Agent 非流式接口，接收 `query` 和可选 `file_ids`
+- `POST /api/files/upload`：上传材料文件并返回 `file_id`
+- `GET /api/visualizations/capabilities`：查询统一可视化能力清单
+- `POST /api/visualizations/render`：按明确意图调用统一可视化接口
 - `GET /api/assets/splat/{filename}?quality=auto`：解析 3DGS/Spark 资产
 - `GET /api/assets/pipeline`：查看 3D 资产管线状态
-- `POST /api/mcp/render`：对指定 CIF 请求 MCP 外部渲染
+- `POST /api/mcp/render`：兼容旧版 CIF MCP 渲染接口
 - `POST /api/3dgs/render`：向 3DGS MCP 服务请求独立 viewer 的 `render_url`
 - `POST /api/metrics/render`：记录渲染指标
 - `POST /api/metrics/interaction`：记录交互指标
+
+## 统一可视化 API
+
+推荐外部系统调用 `POST /api/chat`，让 LLM 根据自然语言和文件内容自动选择工具：
+
+```json
+{
+  "query": "请分析上传的数据并自动选择最合适的 MCP 生成交互式可视化",
+  "file_ids": ["file_xxx"]
+}
+```
+
+最终事件中的 `artifacts` 会包含交付信息：
+
+```json
+{
+  "intent": "xrd",
+  "provider": "x-ray-mcp-server",
+  "tool": "x_ray.xrd_file",
+  "display": "iframe",
+  "render_url": "http://example/viewer?render_id=..."
+}
+```
+
+如果调用方已经明确知道可视化类型，可以直接使用确定性的 `POST /api/visualizations/render` 接口：
+
+```json
+{
+  "intent": "dos",
+  "input_type": "file",
+  "file_id": "file_xxx"
+}
+```
+
+当前能力包括：
+
+| intent | 文件类型 | MCP 工具 |
+|---|---|---|
+| `3dgs` | 已注册 3DGS/Spark 资产 | `3dgs.create_render` |
+| `structure` | CIF、XYZ、POSCAR、CELL、PDB | `fz.mol_file` |
+| `dos` | DAT、TXT | `dos.dos_file` |
+| `xrd` | DAT、TXT | `x_ray.xrd_file` |
+| `binary_phase` | XLS、XLSX | `hot2.binary_xlsx_file` |
+| `ternary_phase` | XLS、XLSX | `hot3.ternary_xlsx_file` |
+| `band` | ZIP | `nb.band_zip_file` |
+| `vtp` | VTP | `yxy.vtp_file` |
+| `model` | STL、GLB | `hj_ol.model_file` |
+| `molecular_dynamics` | DUMP、CFG、DATA、DAT、LMP、XYZ | `fzdl.model_file` |
+| `phase_curve` | DAT、TXT | `xt.phase_curve_file` |
+| `liquidus` / `liquidus_dual` / `liquidus_mass` | XLS、XLSX | `yxty3.*` |
+| `isothermal` / `isothermal_dual` / `isothermal_mass` | XLS、XLSX | `dw3.*` |
+| `vertical_section` | XLS、XLSX | `cz3.vertical_xlsx_file` |
+
+相同扩展名可能对应不同能力，例如 TXT 可以是 DOS、XRD 或相曲线数据，XLSX 可以是多种热力学相图。因此 Agent 模式会结合自然语言和文件内容进行判断，而不是只根据扩展名路由。
 
 ## 3DGS MCP 接口
 
@@ -204,8 +321,14 @@ set VITE_3DGS_RENDER_MODE=local
 
 后端基础验证：
 
-```bash
-python -m compileall api core config
+```powershell
+conda run -n agno-assist python -m compileall api core config
+```
+
+后端测试：
+
+```powershell
+conda run -n agno-assist pytest
 ```
 
 前端构建：
@@ -227,6 +350,38 @@ npm --prefix frontend run visual:smoke
 ```
 
 `visual:smoke` 使用本机 Microsoft Edge 检查桌面布局、移动布局和真实 3D canvas 非空渲染。截图会写入已忽略的 `frontend/test-results/`。
+
+### 外部 MCP 端到端冒烟测试
+
+`tests/smoke_external_mcp_api.py` 会从 `docs/server_json/README.xlsx` 记录的官方地址下载测试文件到系统临时目录，然后验证“文件上传 → 统一 API → 外部 MCP → `render_url`”完整链路。样例不会写入 Git 仓库。
+
+先启动 Agent Material API，然后执行全部 16 条非 CIF 路由：
+
+```powershell
+conda run -n agno-assist python tests\smoke_external_mcp_api.py --api-base http://127.0.0.1:8081
+```
+
+只测试指定能力：
+
+```powershell
+conda run -n agno-assist python tests\smoke_external_mcp_api.py `
+  --api-base http://127.0.0.1:8081 `
+  --intent dos `
+  --intent xrd `
+  --intent model
+```
+
+只下载官方样例，供浏览器 Demo 手动上传：
+
+```powershell
+conda run -n agno-assist python tests\smoke_external_mcp_api.py --download-only
+```
+
+默认样例目录：
+
+```text
+%TEMP%\agent-material-mcp-samples
+```
 
 ## 3D 资产
 

@@ -44,12 +44,13 @@ SYSTEM_PROMPT = (
         """
         MCP 可视化工具约束：
         - 当用户要求可视化上传文件、绘制 DOS/XRD/相图/结构时，使用 `render_with_mcp`。
+        - 当用户明确要求 3DGS、3D Gaussian Splatting 或高斯泼溅可视化时，使用 `render_with_mcp(intent="3dgs")`。
         - 只能传入 `intent`、`input_type="file"` 和上下文中列出的 `file_id`。
         - 不要编造或输出 MCP server 名称、远程 tool 名称、本地路径、base64 内容或 API key。
         - 如果一个请求需要多个可视化结果，可以多次调用 `render_with_mcp`。
         - 如果多个 `.txt`/`.dat` 文件用途不明确，先要求用户澄清 DOS 或 XRD。
         - PDF/DOC/JPG/PNG 第一版不直接调用 MCP 可视化工具。
-        - `get_mp_structure` 返回 `generated_file_id` 时，可用它继续调用 `render_with_mcp` 做结构可视化。
+        - `get_mp_structure` 返回 `generated_file_id` 时，可用它继续调用 `render_with_mcp` 做结构或 3DGS 可视化。
         """
     ).strip()
     + "\n\n"

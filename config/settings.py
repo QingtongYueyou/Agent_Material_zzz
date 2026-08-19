@@ -172,10 +172,24 @@ MP_API_KEY = os.getenv("MP_API_KEY") or os.getenv("MAPI_KEY")
 POE_API_KEY = os.getenv("POE_API_KEY")
 POE_API_BASE_URL = os.getenv("POE_API_BASE_URL", "https://api.poe.com/v1")
 
-# DeepSeek via uni-api (overrides POE aliases above when using direct import)
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", POE_API_KEY or "")
-DEEPSEEK_API_BASE_URL = os.getenv("DEEPSEEK_API_BASE_URL", "https://uni-api.cstcloud.cn/v1")
+# Provider-specific presets. POE variables remain as legacy MiniMax aliases.
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_API_BASE_URL = os.getenv("DEEPSEEK_API_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL_ID = os.getenv("DEEPSEEK_MODEL_ID", "deepseek-v4-flash")
+MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", POE_API_KEY or "")
+MINIMAX_API_BASE_URL = os.getenv("MINIMAX_API_BASE_URL", POE_API_BASE_URL)
+MINIMAX_MODEL_ID = os.getenv("MINIMAX_MODEL_ID", "MiniMax-M3")
 
-LLM_MODEL_ID = os.getenv("LLM_MODEL_ID", "deepseek-v4-flash")
+LLM_PROVIDER = (os.getenv("LLM_PROVIDER", "deepseek") or "deepseek").strip().lower()
+_LLM_PROVIDERS = {
+    "deepseek": (DEEPSEEK_API_KEY, DEEPSEEK_API_BASE_URL, DEEPSEEK_MODEL_ID),
+    "minimax": (MINIMAX_API_KEY, MINIMAX_API_BASE_URL, MINIMAX_MODEL_ID),
+}
+if LLM_PROVIDER not in _LLM_PROVIDERS:
+    raise RuntimeError("LLM_PROVIDER must be 'deepseek' or 'minimax'.")
+
+_provider_api_key, _provider_api_base_url, _provider_model_id = _LLM_PROVIDERS[LLM_PROVIDER]
+LLM_API_KEY = os.getenv("LLM_API_KEY") or _provider_api_key
+LLM_API_BASE_URL = os.getenv("LLM_API_BASE_URL") or _provider_api_base_url
+LLM_MODEL_ID = os.getenv("LLM_MODEL_ID") or _provider_model_id
 LLM_TIMEOUT_SEC = int(os.getenv("LLM_TIMEOUT_SEC", "45"))

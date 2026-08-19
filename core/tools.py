@@ -11,7 +11,7 @@ from agno.tools import tool
 from mp_api.client import MPRester
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
-from config.settings import CIF_DIR, MCP_TOOL_GATEWAY_ENABLED, MP_API_KEY
+from config.settings import CIF_DIR, MCP_TOOL_GATEWAY_ENABLED, MP_API_KEY, THREEDGS_MCP_ENABLED
 from core.mcp_router import ROUTE_TABLE
 
 
@@ -25,7 +25,7 @@ MP_BLOCKED_ERROR = (
     "请减少请求频率、优先使用本地 CIF 缓存，并按提示联系 support@materialsproject.org 处理解封。"
 )
 
-MCP_RENDER_INTENTS = tuple(ROUTE_TABLE)
+MCP_RENDER_INTENTS = ("3dgs", *ROUTE_TABLE)
 
 _MP_SEARCH_CACHE: dict[tuple[Any, ...], tuple[float, dict]] = {}
 _MP_LAST_REQUEST_AT = 0.0
@@ -465,25 +465,55 @@ def _execute_render_with_mcp(arguments: dict[str, Any]) -> dict[str, Any]:
     input_type = str(arguments.get("input_type") or "").strip()
     file_id = str(arguments.get("file_id") or "").strip()
 
-    if not MCP_TOOL_GATEWAY_ENABLED:
-        return {"error": "MCP tool gateway is disabled."}
-
     if intent not in MCP_RENDER_INTENTS:
         return {"error": f"Unsupported render intent: {intent}"}
     if input_type != "file":
         return {"error": "render_with_mcp only supports input_type=file"}
     if not file_id:
         return {"error": "file_id is required"}
+    if intent == "3dgs" and not THREEDGS_MCP_ENABLED:
+        return {"error": "3DGS MCP rendering is disabled."}
+    if intent != "3dgs" and not MCP_TOOL_GATEWAY_ENABLED:
+        return {"error": "MCP tool gateway is disabled."}
 
     try:
         upload_store = import_module("core.upload_store")
-        mcp_router = import_module("core.mcp_router")
-        mcp_gateway = import_module("core.mcp_gateway")
     except ImportError as exc:
         return {"error": f"MCP tool dependencies unavailable: {exc}"}
 
     try:
         metadata = upload_store.get_file_metadata(file_id)
+        filename = (
+            metadata.get("filename")
+            or metadata.get("original_filename")
+            or metadata.get("stored_filename")
+            or file_id
+        )
+
+        if intent == "3dgs":
+            three_dgs_client = import_module("core.3dgs_mcp_client")
+            result = three_dgs_client.create_render(
+                str(filename),
+                quality="auto",
+                render_profile="performance",
+            )
+            artifact: dict[str, Any] = {
+                "id": f"artifact_{uuid.uuid4().hex[:12]}",
+                "kind": "mcp_visualization",
+                "title": "3D Gaussian Splatting",
+                "intent": "3dgs",
+                "display": "iframe",
+                "render_url": str(result["render_url"]),
+                "created_at": result.get("created_at", time.time()),
+                "source_file_id": file_id,
+                "provider": "local-3dgs-mcp",
+                "tool": "3dgs.create_render",
+            }
+            artifact.update(_mcp_artifact_metadata(result))
+            return artifact
+
+        mcp_router = import_module("core.mcp_router")
+        mcp_gateway = import_module("core.mcp_gateway")
         route = mcp_router.resolve_route(intent, input_type, metadata)
         read_metadata, content_base64 = upload_store.read_file_base64(file_id)
         if isinstance(read_metadata, dict):
@@ -495,12 +525,6 @@ def _execute_render_with_mcp(arguments: dict[str, Any]) -> dict[str, Any]:
         if not server_name or not tool_name:
             return {"error": "Resolved MCP route is missing server or file tool."}
 
-        filename = (
-            metadata.get("filename")
-            or metadata.get("original_filename")
-            or metadata.get("stored_filename")
-            or file_id
-        )
         result = mcp_gateway.call_tool(
             str(server_name),
             str(tool_name),
@@ -519,6 +543,8 @@ def _execute_render_with_mcp(arguments: dict[str, Any]) -> dict[str, Any]:
         "render_url": str(render_url),
         "created_at": time.time(),
         "source_file_id": file_id,
+        "provider": str(server_name),
+        "tool": str(tool_name),
     }
     artifact.update(_mcp_artifact_metadata(result))
     return artifact
@@ -594,8 +620,9 @@ OPENAI_TOOL_SPECS: list[dict[str, Any]] = [
             "name": "render_with_mcp",
             "description": (
                 "Render an uploaded or system-generated materials file with a whitelisted "
-                "MCP visualization route. Only pass intent, input_type=file, and a file_id "
-                "that appears in the conversation context."
+                "MCP visualization route, including local 3DGS. Choose intent='3dgs' only when "
+                "the user explicitly requests 3D Gaussian Splatting/3DGS. Only pass intent, "
+                "input_type=file, and a file_id that appears in the conversation context."
             ),
             "parameters": {
                 "type": "object",

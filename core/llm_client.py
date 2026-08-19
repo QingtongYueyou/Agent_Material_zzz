@@ -6,9 +6,9 @@ import urllib.request
 from typing import Any
 
 from config.settings import (
-    DEEPSEEK_API_BASE_URL,
-    DEEPSEEK_API_KEY,
-    DEEPSEEK_MODEL_ID,
+    LLM_API_BASE_URL,
+    LLM_API_KEY,
+    LLM_MODEL_ID,
     LLM_TIMEOUT_SEC,
 )
 
@@ -27,11 +27,11 @@ def create_chat_completion(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if not DEEPSEEK_API_KEY:
-        raise LLMClientError("未配置 DEEPSEEK_API_KEY，无法调用大模型服务。")
+    if not LLM_API_KEY:
+        raise LLMClientError("未配置当前 LLM 服务的 API Key。")
 
     payload: dict[str, Any] = {
-        "model": model or DEEPSEEK_MODEL_ID,
+        "model": model or LLM_MODEL_ID,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -41,13 +41,13 @@ def create_chat_completion(
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
 
-    api_base = DEEPSEEK_API_BASE_URL.rstrip("/")
+    api_base = LLM_API_BASE_URL.rstrip("/")
     url = f"{api_base}/chat/completions"
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Authorization": f"Bearer {LLM_API_KEY}",
             "Content-Type": "application/json",
         },
         method="POST",
