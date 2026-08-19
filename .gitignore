@@ -53,3 +53,6 @@ cloudflared.exe
 # MCP generated files
 static/uploads/
 static/artifacts/
+
+# Claude Code local config
+.claude/
