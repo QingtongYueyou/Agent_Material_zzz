@@ -54,6 +54,14 @@ cloudflared.exe
 static/uploads/
 static/artifacts/
 
+# File-introspection cache (derived from workflow runs)
+static/file_introspection_cache/
+
+# Local API dev server logs
+.api-*.log
+.api-*.stdout.log
+.api-*.stderr.log
+
 # Claude Code local config
 .claude/
 .codex/
